@@ -1,0 +1,6 @@
+{
+  "name": "BTC AI Predictor",
+  "description": "Real-Time Bitcoin Market Prediction Platform with live Binance streaming, interactive TradingView charts, quantitative indicator models, multi-timeframe analytics, and Gemini AI synthesis.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
