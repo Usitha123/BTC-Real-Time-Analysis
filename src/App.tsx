@@ -34,6 +34,7 @@ import { IndicatorsTable } from './components/IndicatorsTable';
 import { PerformanceHistory } from './components/PerformanceHistory';
 import { OrderBookAndTrades } from './components/OrderBookAndTrades';
 import { AlertsManager } from './components/AlertsManager';
+import { FuturesExecutionPanel } from './components/FuturesExecutionPanel';
 
 import { ShieldAlert, AlertTriangle, Info, Terminal, TrendingUp } from 'lucide-react';
 
@@ -476,7 +477,20 @@ export default function App() {
           </div>
         </section>
 
-        {/* Section 3: Gemini AI Market Synthesis */}
+        {/* Section 3: Futures Trading Execution & Risk Setup */}
+        <section>
+          <FuturesExecutionPanel
+            prediction={activePrediction}
+            currentPrice={currentPrice}
+            indicators={indicators}
+            multiTfSignals={multiTfSignals}
+            activeTimeframe={activePredictionTf}
+            onSelectTimeframe={(tf) => setActivePredictionTf(tf)}
+            candles={candles}
+          />
+        </section>
+
+        {/* Section 4: Gemini AI Market Synthesis */}
         <section>
           <AIAnalysisPanel
             analysis={aiAnalysis}
