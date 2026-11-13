@@ -177,6 +177,8 @@ export type ChartTimeframe =
   | '1d'
   | '1w';
 
+export type TradeHorizon = '1h' | '2h' | '5h' | '10h' | '24h';
+
 export interface MultiTimeframeSignal {
   timeframe: '1m' | '5m' | '15m' | '30m' | '1h' | '4h' | '1d';
   trend: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
@@ -208,4 +210,20 @@ export interface MarketAlert {
   type: 'VOLATILITY' | 'PRICE_SPIKE' | 'VOLUME_SPIKE' | 'RSI' | 'EMA_CROSS' | 'BREAKOUT' | 'CUSTOM';
   severity: 'INFO' | 'WARNING' | 'ALERT';
   timestamp: number;
+}
+
+export interface FuturesMarketMetrics {
+  symbol: string;
+  markPrice: number;
+  indexPrice: number;
+  basisPct: number;
+  fundingRate: number;
+  nextFundingTime: number;
+  openInterestBtc: number;
+  openInterestUsd: number;
+  longShortRatio: number;
+  longAccountPct: number;
+  shortAccountPct: number;
+  takerBuySellRatio: number;
+  fetchedAt: number;
 }

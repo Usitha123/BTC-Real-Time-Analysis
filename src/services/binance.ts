@@ -1,4 +1,4 @@
-import { Candle, Ticker24h, OrderBook, Trade, ChartTimeframe } from '../types/crypto';
+import { Candle, Ticker24h, OrderBook, Trade, ChartTimeframe, FuturesMarketMetrics } from '../types/crypto';
 
 export type ConnectionStatus = 'CONNECTED' | 'RECONNECTING' | 'DISCONNECTED' | 'ERROR';
 
@@ -84,6 +84,50 @@ export class BinanceDataService {
       volume: parseFloat(item[5]),
       closeTime: Number(item[6]),
     }));
+  }
+
+  // Fetch genuine candles across key timeframes in parallel for accurate multi-timeframe confluence
+  public async fetchMultiTimeframeCandles(): Promise<
+    Partial<Record<'1m' | '5m' | '15m' | '30m' | '1h' | '4h' | '1d', Candle[]>>
+  > {
+    const tfs: ('1m' | '5m' | '15m' | '30m' | '1h' | '4h' | '1d')[] = [
+      '1m',
+      '5m',
+      '15m',
+      '30m',
+      '1h',
+      '4h',
+      '1d',
+    ];
+    const results = await Promise.allSettled(
+      tfs.map((tf) => this.fetchHistoricalKlines(tf, 80))
+    );
+    const map: Partial<Record<'1m' | '5m' | '15m' | '30m' | '1h' | '4h' | '1d', Candle[]>> = {};
+    tfs.forEach((tf, idx) => {
+      const res = results[idx];
+      if (res.status === 'fulfilled' && res.value.length > 0) {
+        map[tf] = res.value;
+      }
+    });
+    return map;
+  }
+
+  // Fetch deep historical candles (220 bars) for all stable holding-horizon timeframes (15m, 30m, 1h, 4h)
+  public async fetchHorizonChartData(): Promise<
+    Partial<Record<'15m' | '30m' | '1h' | '4h', Candle[]>>
+  > {
+    const tfs: ('15m' | '30m' | '1h' | '4h')[] = ['15m', '30m', '1h', '4h'];
+    const results = await Promise.allSettled(
+      tfs.map((tf) => this.fetchHistoricalKlines(tf, 220))
+    );
+    const map: Partial<Record<'15m' | '30m' | '1h' | '4h', Candle[]>> = {};
+    tfs.forEach((tf, idx) => {
+      const res = results[idx];
+      if (res.status === 'fulfilled' && res.value.length > 0) {
+        map[tf] = res.value;
+      }
+    });
+    return map;
   }
 
   // Fetch 24-hr ticker stats
@@ -174,6 +218,19 @@ export class BinanceDataService {
       time: t.time,
       isBuyerMaker: t.isBuyerMaker,
     }));
+  }
+
+  // Fetch Binance USD-M Futures metrics (Mark Price, Funding Rate, Open Interest, Long/Short & Taker Ratios)
+  public async fetchFuturesMetrics(): Promise<FuturesMarketMetrics | null> {
+    try {
+      const res = await fetch('/api/binance/futures/metrics?symbol=BTCUSDT');
+      if (!res.ok) return null;
+      const data = await res.json();
+      if (!data || !data.markPrice) return null;
+      return data as FuturesMarketMetrics;
+    } catch {
+      return null;
+    }
   }
 
   // Helper to parse order book

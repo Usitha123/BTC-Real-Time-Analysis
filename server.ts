@@ -93,6 +93,66 @@ app.get('/api/binance/trades', async (req, res) => {
   }
 });
 
+let cachedFuturesMetrics: { timestamp: number; data: any } | null = null;
+
+app.get('/api/binance/futures/metrics', async (req, res) => {
+  try {
+    const symbol = (req.query.symbol as string) || 'BTCUSDT';
+    const now = Date.now();
+    if (cachedFuturesMetrics && now - cachedFuturesMetrics.timestamp < 30000) {
+      return res.json(cachedFuturesMetrics.data);
+    }
+
+    const [premRes, oiRes, lsRes, takerRes] = await Promise.allSettled([
+      fetch(`https://fapi.binance.com/fapi/v1/premiumIndex?symbol=${symbol}`),
+      fetch(`https://fapi.binance.com/fapi/v1/openInterest?symbol=${symbol}`),
+      fetch(`https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol=${symbol}&period=15m&limit=2`),
+      fetch(`https://fapi.binance.com/futures/data/takerlongshortRatio?symbol=${symbol}&period=15m&limit=2`),
+    ]);
+
+    const prem = premRes.status === 'fulfilled' && premRes.value.ok ? await premRes.value.json() : null;
+    const oi = oiRes.status === 'fulfilled' && oiRes.value.ok ? await oiRes.value.json() : null;
+    const lsArr = lsRes.status === 'fulfilled' && lsRes.value.ok ? await lsRes.value.json() : null;
+    const takerArr = takerRes.status === 'fulfilled' && takerRes.value.ok ? await takerRes.value.json() : null;
+
+    if (!prem) {
+      return res.status(502).json({ error: 'Binance Futures API unavailable' });
+    }
+
+    const markPrice = parseFloat(prem.markPrice || '0');
+    const indexPrice = parseFloat(prem.indexPrice || '0');
+    const basisPct = indexPrice > 0 ? ((markPrice - indexPrice) / indexPrice) * 100 : 0;
+    const fundingRate = parseFloat(prem.lastFundingRate || '0');
+    const nextFundingTime = Number(prem.nextFundingTime || 0);
+    const openInterestBtc = oi ? parseFloat(oi.openInterest || '0') : 0;
+    const openInterestUsd = openInterestBtc * markPrice;
+
+    const latestLs = Array.isArray(lsArr) && lsArr.length > 0 ? lsArr[lsArr.length - 1] : null;
+    const latestTaker = Array.isArray(takerArr) && takerArr.length > 0 ? takerArr[takerArr.length - 1] : null;
+
+    const payload = {
+      symbol,
+      markPrice,
+      indexPrice,
+      basisPct,
+      fundingRate,
+      nextFundingTime,
+      openInterestBtc,
+      openInterestUsd,
+      longShortRatio: latestLs ? parseFloat(latestLs.longShortRatio || '1') : 1,
+      longAccountPct: latestLs ? parseFloat(latestLs.longAccount || '0.5') * 100 : 50,
+      shortAccountPct: latestLs ? parseFloat(latestLs.shortAccount || '0.5') * 100 : 50,
+      takerBuySellRatio: latestTaker ? parseFloat(latestTaker.buySellRatio || '1') : 1,
+      fetchedAt: now,
+    };
+
+    cachedFuturesMetrics = { timestamp: now, data: payload };
+    return res.json(payload);
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || 'Failed to fetch futures metrics' });
+  }
+});
+
 // In-memory cache for AI market analysis
 let lastCachedAnalysis: { timestamp: number; price: number; analysis: any } | null = null;
 

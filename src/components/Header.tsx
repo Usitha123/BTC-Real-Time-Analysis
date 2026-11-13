@@ -8,9 +8,7 @@ import {
   WifiOff,
   Sun,
   Moon,
-  Cpu,
   RefreshCw,
-  Zap,
 } from 'lucide-react';
 
 interface HeaderProps {
@@ -50,58 +48,48 @@ export const Header: React.FC<HeaderProps> = ({
     }
   }, [currentPrice, prevPrice]);
 
-  const priceChange = ticker?.priceChange || 0;
   const priceChangePercent = ticker?.priceChangePercent || 0;
   const is24hPositive = priceChangePercent >= 0;
 
   return (
-    <header className="w-full bg-slate-950/95 border-b border-slate-800/90 backdrop-blur sticky top-0 z-40 px-4 py-2.5 transition-colors">
+    <header className="w-full bg-white/95 dark:bg-slate-950/95 border-b border-slate-200 dark:border-slate-800/90 backdrop-blur sticky top-0 z-40 px-4 py-2.5 transition-colors">
       <div className="max-w-[1720px] mx-auto flex flex-wrap items-center justify-between gap-3">
-        {/* Left: Branding & Pair selector */}
+        {/* Left: Branding & Pair */}
         <div className="flex items-center space-x-3">
-          <div className="flex items-center gap-2">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-amber-500 via-orange-500 to-yellow-400 p-0.5 shadow-lg shadow-amber-500/20 flex items-center justify-center">
-              <div className="w-full h-full bg-slate-950 rounded-[10px] flex items-center justify-center">
-                <span className="font-extrabold text-amber-400 text-lg font-mono">₿</span>
-              </div>
+          <div className="flex items-center gap-2.5">
+            <div className="w-9 h-9 rounded-xl bg-amber-500/10 dark:bg-amber-500/15 border border-amber-500/30 flex items-center justify-center shrink-0">
+              <span className="font-extrabold text-amber-600 dark:text-amber-400 text-lg font-mono">₿</span>
             </div>
             <div>
-              <div className="flex items-center gap-1.5">
-                <h1 className="text-sm sm:text-base font-extrabold text-slate-100 tracking-tight font-mono flex items-center gap-1">
-                  BTC <span className="text-amber-400">AI PREDICTOR</span>
-                </h1>
-                <span className="px-1.5 py-0.5 text-[9px] font-mono font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30 rounded">
-                  PRO
-                </span>
-              </div>
-              <p className="text-[10px] text-slate-400 font-mono hidden sm:block">
-                Quantitative Machine Learning & Binance Live Stream
+              <h1 className="text-sm sm:text-base font-extrabold text-slate-900 dark:text-slate-100 tracking-tight">
+                BTC <span className="text-amber-600 dark:text-amber-400">Signal Desk</span>
+              </h1>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 hidden sm:block">
+                Binance Live Stream & Technical Structure Analysis
               </p>
             </div>
           </div>
 
-          <div className="h-6 w-px bg-slate-800 mx-1 hidden md:block"></div>
+          <div className="h-6 w-px bg-slate-200 dark:bg-slate-800 mx-1 hidden md:block"></div>
 
-          {/* Symbol Pill */}
-          <div className="flex items-center gap-1.5 px-2.5 py-1 bg-slate-900 border border-slate-800 rounded-lg text-xs font-mono text-slate-300">
-            <span className="w-2 h-2 rounded-full bg-amber-400"></span>
-            <span className="font-bold text-white">BTC / USDT</span>
-            <span className="text-[10px] text-slate-500">SPOT</span>
+          {/* Pair Label */}
+          <div className="flex items-center gap-1.5 px-2.5 py-1 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-mono text-slate-700 dark:text-slate-300 whitespace-nowrap shrink-0">
+            <span className="font-bold text-slate-900 dark:text-white">BTC / USDT</span>
+            <span className="text-[10px] text-slate-500 dark:text-slate-400">SPOT</span>
           </div>
         </div>
 
         {/* Center: Live Price & 24h Statistics */}
-        <div className="flex flex-wrap items-center gap-4 sm:gap-6 font-mono">
-          {/* Main Ticker Price */}
+        <div className="flex flex-wrap items-center gap-4 sm:gap-6 font-mono tabular-nums">
           <div className="flex items-baseline gap-2">
             <span
-              className={`text-xl sm:text-2xl font-extrabold transition-all duration-300 ${
+              className={`text-xl sm:text-2xl font-extrabold transition-colors duration-300 ${
                 priceFlash === 'UP'
-                  ? 'text-emerald-400 scale-105'
+                  ? 'text-emerald-600 dark:text-emerald-400'
                   : priceFlash === 'DOWN'
-                  ? 'text-rose-400 scale-105'
+                  ? 'text-rose-600 dark:text-rose-400'
                   : currentPrice > 0
-                  ? 'text-slate-100'
+                  ? 'text-slate-900 dark:text-slate-100'
                   : 'text-slate-400'
               }`}
             >
@@ -110,12 +98,11 @@ export const Header: React.FC<HeaderProps> = ({
                 : 'Loading...'}
             </span>
 
-            {/* 24h Change Badge */}
             <span
-              className={`inline-flex items-center gap-0.5 px-2 py-0.5 rounded text-xs font-bold ${
+              className={`inline-flex items-center gap-0.5 px-2 py-0.5 rounded text-xs font-bold whitespace-nowrap shrink-0 ${
                 is24hPositive
-                  ? 'bg-emerald-950/60 text-emerald-400 border border-emerald-500/30'
-                  : 'bg-rose-950/60 text-rose-400 border border-rose-500/30'
+                  ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/25'
+                  : 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/25'
               }`}
             >
               {is24hPositive ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
@@ -124,20 +111,19 @@ export const Header: React.FC<HeaderProps> = ({
             </span>
           </div>
 
-          {/* 24h High / Low / Volume */}
           {ticker && (
-            <div className="hidden xl:flex items-center gap-4 text-xs text-slate-400 border-l border-slate-800 pl-4">
+            <div className="hidden xl:flex items-center gap-4 text-xs text-slate-500 dark:text-slate-400 border-l border-slate-200 dark:border-slate-800 pl-4">
               <div>
                 <span className="text-[10px] text-slate-500 block">24h High</span>
-                <span className="text-slate-200 font-bold">${ticker.highPrice.toLocaleString()}</span>
+                <span className="text-slate-900 dark:text-slate-200 font-bold">${ticker.highPrice.toLocaleString()}</span>
               </div>
               <div>
                 <span className="text-[10px] text-slate-500 block">24h Low</span>
-                <span className="text-slate-200 font-bold">${ticker.lowPrice.toLocaleString()}</span>
+                <span className="text-slate-900 dark:text-slate-200 font-bold">${ticker.lowPrice.toLocaleString()}</span>
               </div>
               <div>
                 <span className="text-[10px] text-slate-500 block">24h Volume (BTC)</span>
-                <span className="text-slate-200 font-bold">
+                <span className="text-slate-900 dark:text-slate-200 font-bold">
                   {ticker.volume.toLocaleString('en-US', { maximumFractionDigits: 0 })} BTC
                 </span>
               </div>
@@ -146,49 +132,48 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
 
         {/* Right: Connection Status & Theme Controls */}
-        <div className="flex items-center space-x-2.5">
-          {/* Binance Connection Badge */}
+        <div className="flex items-center space-x-2">
           <div
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs font-mono transition-all ${
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs font-mono whitespace-nowrap shrink-0 ${
               connectionStatus === 'CONNECTED'
-                ? 'bg-emerald-950/40 border-emerald-800/60 text-emerald-400'
+                ? 'bg-emerald-500/10 border-emerald-500/25 text-emerald-700 dark:text-emerald-400'
                 : connectionStatus === 'RECONNECTING'
-                ? 'bg-amber-950/40 border-amber-800/60 text-amber-400 animate-pulse'
-                : 'bg-rose-950/40 border-rose-800/60 text-rose-400'
+                ? 'bg-amber-500/10 border-amber-500/25 text-amber-700 dark:text-amber-400'
+                : 'bg-rose-500/10 border-rose-500/25 text-rose-700 dark:text-rose-400'
             }`}
           >
             {connectionStatus === 'CONNECTED' ? (
-              <Wifi className="w-3.5 h-3.5 text-emerald-400" />
+              <Wifi className="w-3.5 h-3.5" />
             ) : (
-              <WifiOff className="w-3.5 h-3.5 text-amber-400" />
+              <WifiOff className="w-3.5 h-3.5" />
             )}
             <span className="text-[11px] font-semibold">
               {connectionStatus === 'CONNECTED' ? 'Binance Live' : connectionStatus}
             </span>
             {latencyMs !== undefined && latencyMs > 0 && (
-              <span className="text-[9px] text-slate-400 border-l border-slate-700 pl-1">
+              <span className="text-[10px] opacity-75 border-l border-current/20 pl-1.5">
                 {latencyMs}ms
               </span>
             )}
           </div>
 
-          {/* Manual Refresh / Re-compute */}
           <button
             onClick={onManualRefresh}
             disabled={isRefreshing}
-            className="p-2 rounded-lg bg-slate-900 border border-slate-800 hover:border-slate-700 text-slate-300 hover:text-white transition-all active:scale-95 disabled:opacity-50 cursor-pointer"
-            title="Refresh market data & recalculate predictions"
+            className="p-2 rounded-lg bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors active:scale-95 disabled:opacity-50 cursor-pointer shrink-0"
+            title="Refresh market data & recalculate analysis"
+            aria-label="Refresh market data"
           >
-            <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-amber-400' : ''}`} />
+            <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-amber-500' : ''}`} />
           </button>
 
-          {/* Theme Toggle */}
           <button
             onClick={onToggleTheme}
-            className="p-2 rounded-lg bg-slate-900 border border-slate-800 hover:border-slate-700 text-slate-300 hover:text-white transition-all active:scale-95 cursor-pointer"
+            className="p-2 rounded-lg bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors active:scale-95 cursor-pointer shrink-0"
             title={isDarkMode ? 'Switch to Light Theme' : 'Switch to Dark Theme'}
+            aria-label={isDarkMode ? 'Switch to Light Theme' : 'Switch to Dark Theme'}
           >
-            {isDarkMode ? <Sun className="w-3.5 h-3.5 text-amber-400" /> : <Moon className="w-3.5 h-3.5 text-sky-400" />}
+            {isDarkMode ? <Sun className="w-3.5 h-3.5 text-amber-400" /> : <Moon className="w-3.5 h-3.5 text-slate-700" />}
           </button>
         </div>
       </div>

@@ -230,10 +230,29 @@ export function calculateADX(candles: Candle[], period: number = 14): { adx: num
     tr.push(Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose)));
   }
 
-  // Wilder smooth TR, +DM, -DM
-  const smoothTR = calculateEMA(tr, period);
-  const smoothPDM = calculateEMA(pDm, period);
-  const smoothMDM = calculateEMA(mDm, period);
+  // True Wilder's Smoothing helper for ADX (+DM, -DM, TR, DX)
+  const wilderSmooth = (arr: number[], lenPeriod: number): number[] => {
+    const out: number[] = [];
+    let prev = 0;
+    for (let i = 0; i < arr.length; i++) {
+      if (i < lenPeriod - 1) {
+        out.push(NaN);
+      } else if (i === lenPeriod - 1) {
+        let sum = 0;
+        for (let j = 0; j < lenPeriod; j++) sum += arr[i - j];
+        prev = sum / lenPeriod;
+        out.push(prev);
+      } else {
+        prev = (prev * (lenPeriod - 1) + arr[i]) / lenPeriod;
+        out.push(prev);
+      }
+    }
+    return out;
+  };
+
+  const smoothTR = wilderSmooth(tr, period);
+  const smoothPDM = wilderSmooth(pDm, period);
+  const smoothMDM = wilderSmooth(mDm, period);
 
   const pDi: number[] = [];
   const mDi: number[] = [];
@@ -262,7 +281,7 @@ export function calculateADX(candles: Candle[], period: number = 14): { adx: num
   }
 
   const validDx = dx.slice(validDxStart);
-  const validAdx = calculateEMA(validDx, period);
+  const validAdx = wilderSmooth(validDx, period);
 
   const adx: number[] = new Array(validDxStart).fill(NaN);
   adx.push(...validAdx);
@@ -292,8 +311,19 @@ export function calculateStochastic(candles: Candle[], period: number = 14, smoo
     }
   }
 
-  const k = calculateSMA(rawK.map((v) => (isNaN(v) ? 0 : v)), smoothK);
-  const d = calculateSMA(k.map((v) => (isNaN(v) ? 0 : v)), smoothD);
+  const validStart = rawK.findIndex((v) => !isNaN(v));
+  if (validStart === -1) {
+    return { k: rawK, d: new Array(candles.length).fill(NaN) };
+  }
+  const kValid = calculateSMA(rawK.slice(validStart), smoothK);
+  const k = [...new Array(validStart).fill(NaN), ...kValid];
+
+  const validDStart = k.findIndex((v) => !isNaN(v));
+  if (validDStart === -1) {
+    return { k, d: new Array(candles.length).fill(NaN) };
+  }
+  const dValid = calculateSMA(k.slice(validDStart), smoothD);
+  const d = [...new Array(validDStart).fill(NaN), ...dValid];
   return { k, d };
 }
 
@@ -322,8 +352,19 @@ export function calculateStochRSI(rsiValues: number[], period: number = 14, smoo
     }
   }
 
-  const k = calculateSMA(rawStoch.map((v) => (isNaN(v) ? 0 : v)), smoothK);
-  const d = calculateSMA(k.map((v) => (isNaN(v) ? 0 : v)), smoothD);
+  const validStart = rawStoch.findIndex((v) => !isNaN(v));
+  if (validStart === -1) {
+    return { k: rawStoch, d: new Array(rsiValues.length).fill(NaN) };
+  }
+  const kValid = calculateSMA(rawStoch.slice(validStart), smoothK);
+  const k = [...new Array(validStart).fill(NaN), ...kValid];
+
+  const validDStart = k.findIndex((v) => !isNaN(v));
+  if (validDStart === -1) {
+    return { k, d: new Array(rsiValues.length).fill(NaN) };
+  }
+  const dValid = calculateSMA(k.slice(validDStart), smoothD);
+  const d = [...new Array(validDStart).fill(NaN), ...dValid];
   return { k, d };
 }
 

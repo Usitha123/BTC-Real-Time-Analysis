@@ -11,15 +11,12 @@ import {
   LineSeries,
 } from 'lightweight-charts';
 import { Candle, ChartTimeframe, TechnicalIndicators, PredictionResult } from '../types/crypto';
+import { TradeSignalSetup } from '../services/signalAnalyzer';
 import {
-  Maximize2,
-  Eye,
-  EyeOff,
   Sliders,
-  Layers,
-  TrendingUp,
   Activity,
   Target,
+  Crosshair,
 } from 'lucide-react';
 
 interface TradingChartProps {
@@ -28,6 +25,7 @@ interface TradingChartProps {
   onTimeframeChange: (tf: ChartTimeframe) => void;
   indicators: TechnicalIndicators | null;
   activePrediction: PredictionResult | null;
+  signalSetup?: TradeSignalSetup | null;
   isDarkMode?: boolean;
 }
 
@@ -39,6 +37,7 @@ export const TradingChart: React.FC<TradingChartProps> = ({
   onTimeframeChange,
   indicators,
   activePrediction,
+  signalSetup,
   isDarkMode = true,
 }) => {
   const chartContainerRef = useRef<HTMLDivElement>(null);
@@ -66,7 +65,8 @@ export const TradingChart: React.FC<TradingChartProps> = ({
   const [showEMA200, setShowEMA200] = useState(false);
   const [showBB, setShowBB] = useState(true);
   const [showVWAP, setShowVWAP] = useState(true);
-  const [showPredictionOverlay, setShowPredictionOverlay] = useState(true);
+  const [showPredictionOverlay, setShowPredictionOverlay] = useState(false);
+  const [showSignalLevels, setShowSignalLevels] = useState(true);
   const [showSRLevels, setShowSRLevels] = useState(true);
   const [showControls, setShowControls] = useState(false);
 
@@ -375,31 +375,73 @@ export const TradingChart: React.FC<TradingChartProps> = ({
     });
     priceLinesRef.current = [];
 
-    // Support and Resistance lines
+    // Support and Resistance lines (from prior chart swings or Bollinger Bands)
     if (showSRLevels && indicators) {
-      // Resistance: EMA 50 or Bollinger Upper
-      const rLevel = indicators.bollinger.upper;
-      const sLevel = indicators.bollinger.lower;
+      const rLevel = signalSetup ? signalSetup.swingResistance : indicators.bollinger.upper;
+      const sLevel = signalSetup ? signalSetup.swingSupport : indicators.bollinger.lower;
 
       const rLine = candleSeriesRef.current.createPriceLine({
         price: rLevel,
-        color: 'rgba(239, 68, 68, 0.75)',
+        color: 'rgba(239, 68, 68, 0.45)',
         lineWidth: 1,
-        lineStyle: LineStyle.Dashed,
+        lineStyle: LineStyle.Dotted,
         axisLabelVisible: true,
-        title: `Res (BB Upper): $${rLevel.toFixed(0)}`,
+        title: `Prev Res $${rLevel.toFixed(0)}`,
       });
       priceLinesRef.current.push(rLine);
 
       const sLine = candleSeriesRef.current.createPriceLine({
         price: sLevel,
-        color: 'rgba(16, 185, 129, 0.75)',
+        color: 'rgba(16, 185, 129, 0.45)',
+        lineWidth: 1,
+        lineStyle: LineStyle.Dotted,
+        axisLabelVisible: true,
+        title: `Prev Supp $${sLevel.toFixed(0)}`,
+      });
+      priceLinesRef.current.push(sLine);
+    }
+
+    // Trade Signal Overlay (Entry Price, Take Profit 1 & 2, Stop Loss)
+    if (showSignalLevels && signalSetup) {
+      const entryLine = candleSeriesRef.current.createPriceLine({
+        price: signalSetup.entryPrice,
+        color: '#f59e0b',
+        lineWidth: 2,
+        lineStyle: LineStyle.Solid,
+        axisLabelVisible: true,
+        title: `Entry (${signalSetup.action}): $${signalSetup.entryPrice.toFixed(1)}`,
+      });
+      priceLinesRef.current.push(entryLine);
+
+      const tp1Line = candleSeriesRef.current.createPriceLine({
+        price: signalSetup.takeProfit1,
+        color: '#10b981',
+        lineWidth: 2,
+        lineStyle: LineStyle.Dashed,
+        axisLabelVisible: true,
+        title: `TP1: $${signalSetup.takeProfit1.toFixed(1)}`,
+      });
+      priceLinesRef.current.push(tp1Line);
+
+      const tp2Line = candleSeriesRef.current.createPriceLine({
+        price: signalSetup.takeProfit2,
+        color: '#14b8a6',
         lineWidth: 1,
         lineStyle: LineStyle.Dashed,
         axisLabelVisible: true,
-        title: `Supp (BB Lower): $${sLevel.toFixed(0)}`,
+        title: `TP2: $${signalSetup.takeProfit2.toFixed(1)}`,
       });
-      priceLinesRef.current.push(sLine);
+      priceLinesRef.current.push(tp2Line);
+
+      const slLine = candleSeriesRef.current.createPriceLine({
+        price: signalSetup.stopLoss,
+        color: '#ef4444',
+        lineWidth: 2,
+        lineStyle: LineStyle.Dashed,
+        axisLabelVisible: true,
+        title: `Stop Loss: $${signalSetup.stopLoss.toFixed(1)}`,
+      });
+      priceLinesRef.current.push(slLine);
     }
 
     // Prediction Target Overlay
@@ -407,60 +449,39 @@ export const TradingChart: React.FC<TradingChartProps> = ({
       const isBull = activePrediction.direction === 'UP';
       const color = isBull ? '#10b981' : activePrediction.direction === 'DOWN' ? '#ef4444' : '#94a3b8';
 
-      // Target Price Line
       const targetLine = candleSeriesRef.current.createPriceLine({
         price: activePrediction.predictedPrice,
         color: color,
         lineWidth: 2,
         lineStyle: LineStyle.Solid,
         axisLabelVisible: true,
-        title: `Target ${activePrediction.timeframe} (${activePrediction.expectedChangePct > 0 ? '+' : ''}${activePrediction.expectedChangePct}%): $${activePrediction.predictedPrice}`,
+        title: `Forecast ${activePrediction.timeframe}: $${activePrediction.predictedPrice}`,
       });
       priceLinesRef.current.push(targetLine);
-
-      // Uncertainty corridor lines
-      const lowerLine = candleSeriesRef.current.createPriceLine({
-        price: activePrediction.expectedRange[0],
-        color: 'rgba(148, 163, 184, 0.4)',
-        lineWidth: 1,
-        lineStyle: LineStyle.Dotted,
-        axisLabelVisible: false,
-        title: `Lower Bound`,
-      });
-      priceLinesRef.current.push(lowerLine);
-
-      const upperLine = candleSeriesRef.current.createPriceLine({
-        price: activePrediction.expectedRange[1],
-        color: 'rgba(148, 163, 184, 0.4)',
-        lineWidth: 1,
-        lineStyle: LineStyle.Dotted,
-        axisLabelVisible: false,
-        title: `Upper Bound`,
-      });
-      priceLinesRef.current.push(upperLine);
     }
-  }, [indicators, activePrediction, showPredictionOverlay, showSRLevels]);
+  }, [indicators, activePrediction, signalSetup, showSignalLevels, showPredictionOverlay, showSRLevels]);
 
   const latestCandle = candles[candles.length - 1];
   const activeCandle = hoveredCandle || latestCandle;
 
   return (
-    <div className="relative flex flex-col w-full bg-slate-900/90 border border-slate-800 rounded-xl overflow-hidden shadow-2xl backdrop-blur-md">
+    <div className="relative flex flex-col w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
       {/* Top Header & Chart Controls */}
-      <div className="flex flex-wrap items-center justify-between px-4 py-3 border-b border-slate-800/80 bg-slate-950/60 gap-2">
+      <div className="flex flex-wrap items-center justify-between px-4 py-3 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/60 gap-2">
         {/* Timeframe Selector Buttons */}
         <div className="flex items-center space-x-1 overflow-x-auto pb-1 sm:pb-0">
-          <span className="text-xs font-semibold text-slate-400 mr-2 flex items-center gap-1">
-            <Activity className="w-3.5 h-3.5 text-amber-400" /> TF:
+          <span className="text-xs font-semibold text-slate-500 dark:text-slate-400 mr-2 flex items-center gap-1 whitespace-nowrap shrink-0">
+            <Activity className="w-3.5 h-3.5 text-amber-500" />
+            <span>Chart</span>
           </span>
           {TIMEFRAMES.map((tf) => (
             <button
               key={tf}
               onClick={() => onTimeframeChange(tf)}
-              className={`px-2.5 py-1 text-xs font-mono font-medium rounded transition-all cursor-pointer ${
+              className={`px-2.5 py-1 text-xs font-mono font-medium rounded transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                 timeframe === tf
-                  ? 'bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/20'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+                  ? 'bg-amber-500 text-slate-950 font-bold'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-200/70 dark:hover:bg-slate-800'
               }`}
             >
               {tf.toUpperCase()}
@@ -468,88 +489,104 @@ export const TradingChart: React.FC<TradingChartProps> = ({
           ))}
         </div>
 
-        {/* Indicator Toggles & Settings */}
+        {/* Indicator & Signal Toggles */}
         <div className="flex items-center space-x-2">
           <button
             onClick={() => setShowControls(!showControls)}
-            className={`px-2.5 py-1 text-xs font-medium rounded border transition-colors flex items-center gap-1.5 cursor-pointer ${
+            className={`px-2.5 py-1 text-xs font-medium rounded border transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer ${
               showControls
-                ? 'bg-blue-600/30 border-blue-500/50 text-blue-300'
-                : 'border-slate-700 text-slate-400 hover:text-slate-200 hover:border-slate-600'
+                ? 'bg-slate-900 dark:bg-slate-100 border-slate-900 dark:border-slate-100 text-white dark:text-slate-900'
+                : 'border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
             }`}
           >
             <Sliders className="w-3.5 h-3.5" />
             <span>Indicators ({[showEMA20, showEMA50, showEMA200, showBB, showVWAP].filter(Boolean).length})</span>
           </button>
 
-          <button
-            onClick={() => setShowPredictionOverlay(!showPredictionOverlay)}
-            className={`px-2.5 py-1 text-xs font-medium rounded border transition-colors flex items-center gap-1.5 cursor-pointer ${
-              showPredictionOverlay
-                ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
-                : 'border-slate-700 text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <Target className="w-3.5 h-3.5" />
-            <span>Prediction Target</span>
-          </button>
+          {signalSetup && (
+            <button
+              onClick={() => setShowSignalLevels(!showSignalLevels)}
+              className={`px-2.5 py-1 text-xs font-medium rounded border transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer ${
+                showSignalLevels
+                  ? 'bg-amber-500/15 border-amber-500/50 text-amber-700 dark:text-amber-300'
+                  : 'border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+              }`}
+            >
+              <Crosshair className="w-3.5 h-3.5" />
+              <span>Entry / TP / SL</span>
+            </button>
+          )}
+
+          {activePrediction && (
+            <button
+              onClick={() => setShowPredictionOverlay(!showPredictionOverlay)}
+              className={`px-2.5 py-1 text-xs font-medium rounded border transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer ${
+                showPredictionOverlay
+                  ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-700 dark:text-emerald-300'
+                  : 'border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+              }`}
+            >
+              <Target className="w-3.5 h-3.5" />
+              <span>Forecast</span>
+            </button>
+          )}
         </div>
       </div>
 
       {/* Dropdown Indicator Filter Bar */}
       {showControls && (
-        <div className="flex flex-wrap items-center gap-2 px-4 py-2.5 bg-slate-950/90 border-b border-slate-800 text-xs">
-          <label className="flex items-center gap-1.5 cursor-pointer text-sky-400 hover:text-sky-300">
+        <div className="flex flex-wrap items-center gap-4 px-4 py-2.5 bg-slate-50 dark:bg-slate-950 border-b border-slate-200 dark:border-slate-800 text-xs">
+          <label className="flex items-center gap-1.5 cursor-pointer text-sky-600 dark:text-sky-400">
             <input
               type="checkbox"
               checked={showEMA20}
               onChange={(e) => setShowEMA20(e.target.checked)}
-              className="rounded accent-sky-400 cursor-pointer"
+              className="rounded accent-sky-500 cursor-pointer"
             />
             EMA 20
           </label>
-          <label className="flex items-center gap-1.5 cursor-pointer text-amber-400 hover:text-amber-300 ml-2">
+          <label className="flex items-center gap-1.5 cursor-pointer text-amber-600 dark:text-amber-400">
             <input
               type="checkbox"
               checked={showEMA50}
               onChange={(e) => setShowEMA50(e.target.checked)}
-              className="rounded accent-amber-400 cursor-pointer"
+              className="rounded accent-amber-500 cursor-pointer"
             />
             EMA 50
           </label>
-          <label className="flex items-center gap-1.5 cursor-pointer text-purple-400 hover:text-purple-300 ml-2">
+          <label className="flex items-center gap-1.5 cursor-pointer text-purple-600 dark:text-purple-400">
             <input
               type="checkbox"
               checked={showEMA200}
               onChange={(e) => setShowEMA200(e.target.checked)}
-              className="rounded accent-purple-400 cursor-pointer"
+              className="rounded accent-purple-500 cursor-pointer"
             />
             EMA 200
           </label>
-          <label className="flex items-center gap-1.5 cursor-pointer text-cyan-400 hover:text-cyan-300 ml-2">
+          <label className="flex items-center gap-1.5 cursor-pointer text-cyan-600 dark:text-cyan-400">
             <input
               type="checkbox"
               checked={showBB}
               onChange={(e) => setShowBB(e.target.checked)}
-              className="rounded accent-cyan-400 cursor-pointer"
+              className="rounded accent-cyan-500 cursor-pointer"
             />
             Bollinger (20, 2)
           </label>
-          <label className="flex items-center gap-1.5 cursor-pointer text-orange-400 hover:text-orange-300 ml-2">
+          <label className="flex items-center gap-1.5 cursor-pointer text-orange-600 dark:text-orange-400">
             <input
               type="checkbox"
               checked={showVWAP}
               onChange={(e) => setShowVWAP(e.target.checked)}
-              className="rounded accent-orange-400 cursor-pointer"
+              className="rounded accent-orange-500 cursor-pointer"
             />
             VWAP
           </label>
-          <label className="flex items-center gap-1.5 cursor-pointer text-rose-400 hover:text-rose-300 ml-2">
+          <label className="flex items-center gap-1.5 cursor-pointer text-rose-600 dark:text-rose-400">
             <input
               type="checkbox"
               checked={showSRLevels}
               onChange={(e) => setShowSRLevels(e.target.checked)}
-              className="rounded accent-rose-400 cursor-pointer"
+              className="rounded accent-rose-500 cursor-pointer"
             />
             Support & Resistance
           </label>
@@ -557,31 +594,33 @@ export const TradingChart: React.FC<TradingChartProps> = ({
       )}
 
       {/* Floating Price & Candle Legend */}
-      <div className="absolute top-14 left-4 z-10 pointer-events-none flex flex-wrap items-center gap-3 text-xs font-mono bg-slate-950/70 px-3 py-1.5 rounded border border-slate-800/80 backdrop-blur">
-        <span className="text-slate-400 font-bold">BTC/USDT</span>
+      <div className="px-4 py-2 border-b border-slate-200 dark:border-slate-800/80 bg-white dark:bg-slate-950/40 flex flex-wrap items-center gap-4 text-xs font-mono tabular-nums">
+        <span className="text-slate-700 dark:text-slate-300 font-bold">BTC/USDT</span>
         {activeCandle && typeof activeCandle.close === 'number' && (
           <>
-            <span className="text-slate-400">
-              O: <span className="text-slate-200">${(activeCandle.open ?? activeCandle.close).toFixed(2)}</span>
+            <span className="text-slate-500 dark:text-slate-400">
+              O <span className="text-slate-900 dark:text-slate-200">${(activeCandle.open ?? activeCandle.close).toFixed(2)}</span>
             </span>
-            <span className="text-slate-400">
-              H: <span className="text-slate-200">${(activeCandle.high ?? activeCandle.close).toFixed(2)}</span>
+            <span className="text-slate-500 dark:text-slate-400">
+              H <span className="text-slate-900 dark:text-slate-200">${(activeCandle.high ?? activeCandle.close).toFixed(2)}</span>
             </span>
-            <span className="text-slate-400">
-              L: <span className="text-slate-200">${(activeCandle.low ?? activeCandle.close).toFixed(2)}</span>
+            <span className="text-slate-500 dark:text-slate-400">
+              L <span className="text-slate-900 dark:text-slate-200">${(activeCandle.low ?? activeCandle.close).toFixed(2)}</span>
             </span>
-            <span className="text-slate-400">
-              C:{' '}
+            <span className="text-slate-500 dark:text-slate-400">
+              C{' '}
               <span
                 className={`font-semibold ${
-                  activeCandle.close >= (activeCandle.open ?? activeCandle.close) ? 'text-emerald-400' : 'text-rose-400'
+                  activeCandle.close >= (activeCandle.open ?? activeCandle.close)
+                    ? 'text-emerald-600 dark:text-emerald-400'
+                    : 'text-rose-600 dark:text-rose-400'
                 }`}
               >
                 ${activeCandle.close.toFixed(2)}
               </span>
             </span>
-            <span className="text-slate-400">
-              Vol: <span className="text-slate-200">{(activeCandle.volume ?? 0).toFixed(2)}</span>
+            <span className="text-slate-500 dark:text-slate-400">
+              Vol <span className="text-slate-900 dark:text-slate-200">{(activeCandle.volume ?? 0).toFixed(2)}</span>
             </span>
           </>
         )}
@@ -591,21 +630,21 @@ export const TradingChart: React.FC<TradingChartProps> = ({
       <div ref={chartContainerRef} className="w-full h-[480px]" />
 
       {/* Bottom Chart Footer info */}
-      <div className="flex items-center justify-between px-4 py-2 border-t border-slate-800/80 bg-slate-950/40 text-[11px] font-mono text-slate-500">
-        <div className="flex items-center gap-4">
-          <span className="flex items-center gap-1">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block"></span> Bullish Candle
-          </span>
-          <span className="flex items-center gap-1">
-            <span className="w-2 h-2 rounded-full bg-rose-500 inline-block"></span> Bearish Candle
-          </span>
-          {showPredictionOverlay && activePrediction && (
-            <span className="text-emerald-400/90 font-medium hidden sm:inline">
-              Overlay: {activePrediction.timeframe} Target (${activePrediction.predictedPrice})
-            </span>
+      <div className="flex flex-wrap items-center justify-between px-4 py-2 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/40 text-xs font-mono tabular-nums text-slate-500 dark:text-slate-400 gap-2">
+        <div className="flex flex-wrap items-center gap-3">
+          {showSignalLevels && signalSetup ? (
+            <>
+              <span className="text-amber-600 dark:text-amber-400">Entry ${signalSetup.entryPrice.toFixed(0)}</span>
+              <span aria-hidden="true">·</span>
+              <span className="text-emerald-600 dark:text-emerald-400">TP1 ${signalSetup.takeProfit1.toFixed(0)}</span>
+              <span aria-hidden="true">·</span>
+              <span className="text-rose-600 dark:text-rose-400">SL ${signalSetup.stopLoss.toFixed(0)}</span>
+            </>
+          ) : (
+            <span>Scroll to zoom · Drag to pan</span>
           )}
         </div>
-        <div>Volume Histogram & Technical Overlay Enabled</div>
+        <span>Binance OHLCV + Volume</span>
       </div>
     </div>
   );
