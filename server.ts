@@ -3,6 +3,21 @@ import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI, Type, ThinkingLevel } from '@google/genai';
 import path from 'path';
 import dotenv from 'dotenv';
+import {
+  analyzeHorizonTradeSetup,
+  getStrictlyClosedCandles,
+  HORIZON_CONFIG,
+} from './src/services/signalAnalyzer';
+import { evaluateTimeframe } from './src/services/multiTimeframe';
+import type {
+  Candle,
+  FuturesMarketMetrics,
+  FuturesSymbolInfo,
+  MultiTimeframeSignal,
+  ScreenerResponse,
+  ScreenerSetupEntry,
+  TradeHorizon,
+} from './src/types/crypto';
 
 dotenv.config();
 
@@ -110,57 +125,116 @@ app.get('/api/binance/trades', async (req, res) => {
   }
 });
 
-let cachedFuturesSymbols: { timestamp: number; data: any[] } | null = null;
+let cachedFuturesSymbols: { timestamp: number; data: FuturesSymbolInfo[] } | null = null;
+
+async function fetchJsonWithTimeout(url: string, timeoutMs = 4500): Promise<any | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      signal: controller.signal,
+      headers: { 'User-Agent': 'Crypto-Signal-Desk' },
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function runPool<T, R>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T) => Promise<R>
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let nextIdx = 0;
+
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (nextIdx < items.length) {
+      const idx = nextIdx++;
+      results[idx] = await worker(items[idx]);
+    }
+  });
+
+  await Promise.all(workers);
+  return results;
+}
+
+async function getFuturesSymbolsList(): Promise<FuturesSymbolInfo[]> {
+  const now = Date.now();
+  if (cachedFuturesSymbols && now - cachedFuturesSymbols.timestamp < 60000) {
+    return cachedFuturesSymbols.data;
+  }
+
+  const [infoJson, tickersJson] = await Promise.all([
+    fetchJsonWithTimeout('https://fapi.binance.com/fapi/v1/exchangeInfo', 6000),
+    fetchJsonWithTimeout('https://fapi.binance.com/fapi/v1/ticker/24hr', 6000),
+  ]);
+
+  if (!infoJson || !Array.isArray(infoJson.symbols)) {
+    throw new Error('Unable to load Binance Futures exchange symbols');
+  }
+
+  const tickerMap = new Map<string, any>();
+  if (Array.isArray(tickersJson)) {
+    for (const t of tickersJson) {
+      if (t && t.symbol) tickerMap.set(t.symbol, t);
+    }
+  }
+
+  const pairs: FuturesSymbolInfo[] = infoJson.symbols
+    .filter(
+      (s: any) =>
+        s.contractType === 'PERPETUAL' &&
+        s.status === 'TRADING' &&
+        s.quoteAsset === 'USDT'
+    )
+    .map((s: any) => {
+      const t = tickerMap.get(s.symbol);
+      return {
+        symbol: s.symbol,
+        baseAsset: s.baseAsset,
+        quoteAsset: s.quoteAsset,
+        pricePrecision: typeof s.pricePrecision === 'number' ? s.pricePrecision : 2,
+        quantityPrecision: typeof s.quantityPrecision === 'number' ? s.quantityPrecision : 3,
+        lastPrice: t ? parseFloat(t.lastPrice || '0') : 0,
+        priceChangePercent: t ? parseFloat(t.priceChangePercent || '0') : 0,
+        quoteVolume: t ? parseFloat(t.quoteVolume || '0') : 0,
+      };
+    })
+    .sort((a: FuturesSymbolInfo, b: FuturesSymbolInfo) => b.quoteVolume - a.quoteVolume);
+
+  cachedFuturesSymbols = { timestamp: now, data: pairs };
+  return pairs;
+}
+
+let cachedPremiumIndex: { timestamp: number; map: Map<string, any> } | null = null;
+
+async function getPremiumIndexMap(): Promise<Map<string, any>> {
+  const now = Date.now();
+  if (cachedPremiumIndex && now - cachedPremiumIndex.timestamp < 30000) {
+    return cachedPremiumIndex.map;
+  }
+
+  const arr = await fetchJsonWithTimeout('https://fapi.binance.com/fapi/v1/premiumIndex', 5000);
+  const map = new Map<string, any>();
+  if (Array.isArray(arr)) {
+    for (const item of arr) {
+      if (item && item.symbol) map.set(item.symbol, item);
+    }
+  }
+  if (map.size > 0) {
+    cachedPremiumIndex = { timestamp: now, map };
+  }
+  return map;
+}
 
 app.get('/api/binance/futures/symbols', async (_req, res) => {
   try {
-    const now = Date.now();
-    if (cachedFuturesSymbols && now - cachedFuturesSymbols.timestamp < 60000) {
-      return res.json(cachedFuturesSymbols.data);
-    }
-
-    const [infoRes, tickersRes] = await Promise.allSettled([
-      fetch('https://fapi.binance.com/fapi/v1/exchangeInfo'),
-      fetch('https://fapi.binance.com/fapi/v1/ticker/24hr'),
-    ]);
-
-    const infoJson = infoRes.status === 'fulfilled' && infoRes.value.ok ? await infoRes.value.json() : null;
-    const tickersJson = tickersRes.status === 'fulfilled' && tickersRes.value.ok ? await tickersRes.value.json() : null;
-
-    if (!infoJson || !Array.isArray(infoJson.symbols)) {
-      return res.status(502).json({ error: 'Unable to load Binance Futures exchange symbols' });
-    }
-
-    const tickerMap = new Map<string, any>();
-    if (Array.isArray(tickersJson)) {
-      for (const t of tickersJson) {
-        if (t && t.symbol) tickerMap.set(t.symbol, t);
-      }
-    }
-
-    const pairs = infoJson.symbols
-      .filter(
-        (s: any) =>
-          s.contractType === 'PERPETUAL' &&
-          s.status === 'TRADING' &&
-          s.quoteAsset === 'USDT'
-      )
-      .map((s: any) => {
-        const t = tickerMap.get(s.symbol);
-        return {
-          symbol: s.symbol,
-          baseAsset: s.baseAsset,
-          quoteAsset: s.quoteAsset,
-          pricePrecision: typeof s.pricePrecision === 'number' ? s.pricePrecision : 2,
-          quantityPrecision: typeof s.quantityPrecision === 'number' ? s.quantityPrecision : 3,
-          lastPrice: t ? parseFloat(t.lastPrice || '0') : 0,
-          priceChangePercent: t ? parseFloat(t.priceChangePercent || '0') : 0,
-          quoteVolume: t ? parseFloat(t.quoteVolume || '0') : 0,
-        };
-      })
-      .sort((a: any, b: any) => b.quoteVolume - a.quoteVolume);
-
-    cachedFuturesSymbols = { timestamp: now, data: pairs };
+    const pairs = await getFuturesSymbolsList();
     return res.json(pairs);
   } catch (error: any) {
     return res.status(500).json({ error: error.message || 'Failed to load futures symbols' });
@@ -225,6 +299,232 @@ app.get('/api/binance/futures/metrics', async (req, res) => {
     return res.json(payload);
   } catch (error: any) {
     return res.status(500).json({ error: error.message || 'Failed to fetch futures metrics' });
+  }
+});
+
+const cachedScreenerByHorizon = new Map<string, { timestamp: number; data: ScreenerResponse }>();
+const VALID_HORIZONS: TradeHorizon[] = ['1h', '2h', '5h', '10h', '24h'];
+const MTF_INTERVALS: ('1m' | '5m' | '15m' | '30m' | '1h' | '4h' | '1d')[] = [
+  '1m',
+  '5m',
+  '15m',
+  '30m',
+  '1h',
+  '4h',
+  '1d',
+];
+
+function parseBinanceKlines(raw: any): Candle[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((item) => ({
+    time: Math.floor(Number(item[0]) / 1000),
+    open: parseFloat(item[1]),
+    high: parseFloat(item[2]),
+    low: parseFloat(item[3]),
+    close: parseFloat(item[4]),
+    volume: parseFloat(item[5]),
+    closeTime: Number(item[6]),
+  }));
+}
+
+app.get('/api/binance/futures/screener', async (req, res) => {
+  try {
+    const rawHorizon = ((req.query.horizon as string) || '5h').toLowerCase() as TradeHorizon;
+    const horizon: TradeHorizon = VALID_HORIZONS.includes(rawHorizon) ? rawHorizon : '5h';
+    const limit = Math.min(20, Math.max(6, parseInt((req.query.limit as string) || '16', 10) || 16));
+    const forceRefresh = req.query.refresh === '1' || req.query.refresh === 'true';
+
+    const cacheKey = `${horizon}_${limit}`;
+    const now = Date.now();
+    const cached = cachedScreenerByHorizon.get(cacheKey);
+    if (!forceRefresh && cached && now - cached.timestamp < 45000) {
+      return res.json(cached.data);
+    }
+
+    const [symbols, premMap] = await Promise.all([
+      getFuturesSymbolsList(),
+      getPremiumIndexMap(),
+    ]);
+
+    // Evaluate top liquid USD-M Perpetual pairs
+    const candidates = symbols.filter((s) => s.lastPrice > 0 && s.quoteVolume > 0).slice(0, limit);
+    const meta = HORIZON_CONFIG[horizon];
+
+    const scanned = await runPool(candidates, 4, async (symInfo): Promise<ScreenerSetupEntry | null> => {
+      try {
+        const sym = symInfo.symbol;
+
+        // Fetch primary horizon chart (220 bars) + remaining 6 MTF intervals (80 bars) + Futures positioning
+        const klineRequests = MTF_INTERVALS.map((tf) => {
+          const klineLimit = tf === meta.chartTf ? 220 : 80;
+          return fetchJsonWithTimeout(
+            `https://fapi.binance.com/fapi/v1/klines?symbol=${sym}&interval=${tf}&limit=${klineLimit}`,
+            5000
+          ).then((raw) => ({ tf, candles: parseBinanceKlines(raw) }));
+        });
+
+        const [klineResults, oiJson, lsArr, takerArr] = await Promise.all([
+          Promise.all(klineRequests),
+          fetchJsonWithTimeout(`https://fapi.binance.com/fapi/v1/openInterest?symbol=${sym}`, 4000),
+          fetchJsonWithTimeout(
+            `https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol=${sym}&period=15m&limit=2`,
+            4000
+          ),
+          fetchJsonWithTimeout(
+            `https://fapi.binance.com/futures/data/takerlongshortRatio?symbol=${sym}&period=15m&limit=2`,
+            4000
+          ),
+        ]);
+
+        const candlesByTf = new Map<string, Candle[]>();
+        for (const r of klineResults) {
+          if (r.candles.length > 0) {
+            candlesByTf.set(r.tf, r.candles);
+          }
+        }
+
+        const primaryCandles = candlesByTf.get(meta.chartTf) || [];
+        if (primaryCandles.length < 55) return null;
+
+        const multiTfSignals: MultiTimeframeSignal[] = [];
+        for (const tf of MTF_INTERVALS) {
+          const list = candlesByTf.get(tf);
+          if (!list) continue;
+          const closed = getStrictlyClosedCandles(list);
+          if (closed.length >= 15) {
+            multiTfSignals.push(evaluateTimeframe(tf, closed.slice(-80)));
+          }
+        }
+
+        const prem = premMap.get(sym);
+        const markPrice = prem ? parseFloat(prem.markPrice || `${symInfo.lastPrice}`) : symInfo.lastPrice;
+        const indexPrice = prem ? parseFloat(prem.indexPrice || `${markPrice}`) : markPrice;
+        const basisPct = indexPrice > 0 ? ((markPrice - indexPrice) / indexPrice) * 100 : 0;
+        const fundingRate = prem ? parseFloat(prem.lastFundingRate || '0') : 0;
+        const nextFundingTime = prem ? Number(prem.nextFundingTime || 0) : 0;
+        const openInterestBtc = oiJson ? parseFloat(oiJson.openInterest || '0') : 0;
+        const openInterestUsd = openInterestBtc * markPrice;
+
+        const latestLs = Array.isArray(lsArr) && lsArr.length > 0 ? lsArr[lsArr.length - 1] : null;
+        const latestTaker = Array.isArray(takerArr) && takerArr.length > 0 ? takerArr[takerArr.length - 1] : null;
+
+        const futuresMetrics: FuturesMarketMetrics = {
+          symbol: sym,
+          markPrice,
+          indexPrice,
+          basisPct,
+          fundingRate,
+          nextFundingTime,
+          openInterestBtc,
+          openInterestUsd,
+          longShortRatio: latestLs ? parseFloat(latestLs.longShortRatio || '1') : 1,
+          longAccountPct: latestLs ? parseFloat(latestLs.longAccount || '0.5') * 100 : 50,
+          shortAccountPct: latestLs ? parseFloat(latestLs.shortAccount || '0.5') * 100 : 50,
+          takerBuySellRatio: latestTaker ? parseFloat(latestTaker.buySellRatio || '1') : 1,
+          fetchedAt: now,
+        };
+
+        // Also cache futuresMetrics per symbol so opening the coin is instantaneous
+        cachedFuturesMetrics.set(sym, { timestamp: now, data: futuresMetrics });
+
+        const setup = analyzeHorizonTradeSetup(
+          primaryCandles,
+          horizon,
+          multiTfSignals,
+          futuresMetrics,
+          sym,
+          symInfo.pricePrecision
+        );
+
+        if (!setup) return null;
+
+        const mtfBullCount = multiTfSignals.filter((s) => s.trend === 'BULLISH').length;
+        const mtfBearCount = multiTfSignals.filter((s) => s.trend === 'BEARISH').length;
+
+        const directionalNetRatio =
+          Math.abs(setup.bullishCount - setup.bearishCount) / Math.max(1, setup.totalCriteria);
+        const mtfDominance = Math.max(mtfBullCount, mtfBearCount) / Math.max(1, multiTfSignals.length || 7);
+        const backtestContribution = setup.backtestTrades >= 4 ? setup.backtestWinRate * 0.35 : 14;
+        const rrContribution = Math.min(setup.riskRewardRatio, 3.0) * 8;
+
+        const rawRank =
+          (setup.action !== 'WAIT' ? 100 : 0) +
+          directionalNetRatio * 45 +
+          setup.confidenceScore * 0.45 +
+          backtestContribution +
+          rrContribution +
+          mtfDominance * 20;
+
+        return {
+          symbol: sym,
+          baseAsset: symInfo.baseAsset,
+          pricePrecision: setup.pricePrecision,
+          lastPrice: symInfo.lastPrice,
+          priceChangePercent: symInfo.priceChangePercent,
+          quoteVolume: symInfo.quoteVolume,
+          horizon: setup.horizon,
+          horizonLabel: setup.horizonLabel,
+          timeframe: setup.timeframe,
+          action: setup.action,
+          entryPrice: setup.entryPrice,
+          entryZone: setup.entryZone,
+          takeProfit1: setup.takeProfit1,
+          takeProfit2: setup.takeProfit2,
+          stopLoss: setup.stopLoss,
+          tp1Pct: setup.tp1Pct,
+          tp2Pct: setup.tp2Pct,
+          slPct: setup.slPct,
+          riskRewardRatio: setup.riskRewardRatio,
+          bullishCount: setup.bullishCount,
+          bearishCount: setup.bearishCount,
+          neutralCount: setup.neutralCount,
+          totalCriteria: setup.totalCriteria,
+          agreementPct: setup.agreementPct,
+          confidenceScore: setup.confidenceScore,
+          backtestWinRate: setup.backtestWinRate,
+          backtestTrades: setup.backtestTrades,
+          backtestAvgRR: setup.backtestAvgRR,
+          recommendedLeverage: setup.recommendedLeverage,
+          maxSafeLeverage: setup.maxSafeLeverage,
+          detectedPattern: setup.detectedPattern,
+          swingSupport: setup.swingSupport,
+          swingResistance: setup.swingResistance,
+          pivotPoint: setup.pivotPoint,
+          supertrendLevel: setup.supertrendLevel,
+          fundingRate: futuresMetrics.fundingRate,
+          basisPct: futuresMetrics.basisPct,
+          takerBuySellRatio: futuresMetrics.takerBuySellRatio,
+          longAccountPct: futuresMetrics.longAccountPct,
+          shortAccountPct: futuresMetrics.shortAccountPct,
+          openInterestUsd: futuresMetrics.openInterestUsd,
+          mtfBullCount,
+          mtfBearCount,
+          rankScore: parseFloat(rawRank.toFixed(1)),
+          summary: setup.summary,
+          criteria: setup.criteria,
+          closedCandleTime: setup.closedCandleTime,
+          generatedAt: setup.generatedAt,
+        };
+      } catch {
+        return null;
+      }
+    });
+
+    const setups = scanned
+      .filter((entry): entry is ScreenerSetupEntry => entry !== null)
+      .sort((a, b) => b.rankScore - a.rankScore);
+
+    const payload: ScreenerResponse = {
+      horizon,
+      scannedCount: setups.length,
+      generatedAt: now,
+      setups,
+    };
+
+    cachedScreenerByHorizon.set(cacheKey, { timestamp: now, data: payload });
+    return res.json(payload);
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || 'Failed to scan futures setups' });
   }
 });
 

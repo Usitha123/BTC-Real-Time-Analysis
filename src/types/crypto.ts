@@ -238,3 +238,74 @@ export interface FuturesSymbolInfo {
   priceChangePercent: number;
   quoteVolume: number;
 }
+
+export type CriterionSignal = 'BULLISH' | 'BEARISH' | 'NEUTRAL';
+
+export interface TechnicalCriterion {
+  id: string;
+  name: string;
+  category: 'Trend' | 'Momentum' | 'Volatility' | 'Volume' | 'Chart Structure' | 'Futures';
+  value: string;
+  signal: CriterionSignal;
+  weight: number;
+  reason: string;
+}
+
+export interface ScreenerSetupEntry {
+  symbol: string;
+  baseAsset: string;
+  pricePrecision: number;
+  lastPrice: number;
+  priceChangePercent: number;
+  quoteVolume: number;
+  horizon: TradeHorizon;
+  horizonLabel: string;
+  timeframe: ChartTimeframe;
+  action: 'BUY' | 'SELL' | 'WAIT';
+  entryPrice: number;
+  entryZone: [number, number];
+  takeProfit1: number;
+  takeProfit2: number;
+  stopLoss: number;
+  tp1Pct: number;
+  tp2Pct: number;
+  slPct: number;
+  riskRewardRatio: number;
+  bullishCount: number;
+  bearishCount: number;
+  neutralCount: number;
+  totalCriteria: number;
+  agreementPct: number;
+  confidenceScore: number;
+  backtestWinRate: number;
+  backtestTrades: number;
+  backtestAvgRR: number;
+  recommendedLeverage: number;
+  maxSafeLeverage: number;
+  detectedPattern: string;
+  swingSupport: number;
+  swingResistance: number;
+  pivotPoint: number;
+  supertrendLevel: number;
+  fundingRate: number;
+  basisPct: number;
+  takerBuySellRatio: number;
+  longAccountPct: number;
+  shortAccountPct: number;
+  openInterestUsd: number;
+  mtfBullCount: number;
+  mtfBearCount: number;
+  rankScore: number;
+  summary: string;
+  criteria: TechnicalCriterion[];
+  closedCandleTime: number;
+  generatedAt: number;
+}
+
+export interface ScreenerResponse {
+  horizon: TradeHorizon;
+  scannedCount: number;
+  generatedAt: number;
+  setups: ScreenerSetupEntry[];
+}
+

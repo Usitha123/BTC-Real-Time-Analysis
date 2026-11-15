@@ -21,6 +21,8 @@ import {
   TradeHorizon,
   FuturesMarketMetrics,
   FuturesSymbolInfo,
+  ScreenerResponse,
+  ScreenerSetupEntry,
 } from './types/crypto';
 import { BinanceDataService, ConnectionStatus } from './services/binance';
 import { calculateAllIndicators } from './services/indicators';
@@ -41,13 +43,14 @@ import { PerformanceHistory } from './components/PerformanceHistory';
 import { OrderBookAndTrades } from './components/OrderBookAndTrades';
 import { AlertsManager } from './components/AlertsManager';
 import { FuturesExecutionPanel } from './components/FuturesExecutionPanel';
+import { TopCoinsScreener } from './components/TopCoinsScreener';
 
-import { ShieldAlert, LayoutGrid, SlidersHorizontal } from 'lucide-react';
+import { ShieldAlert, LayoutGrid, SlidersHorizontal, BarChart3 } from 'lucide-react';
 
 export default function App() {
   // Theme, View & Selected Futures Market State
   const [isDarkMode, setIsDarkMode] = useState<boolean>(true);
-  const [viewMode, setViewMode] = useState<'SIMPLE' | 'PRO'>('SIMPLE');
+  const [viewMode, setViewMode] = useState<'SIMPLE' | 'SCREENER' | 'PRO'>('SIMPLE');
   const [activeHorizon, setActiveHorizon] = useState<TradeHorizon>('5h');
   const [activeSymbol, setActiveSymbol] = useState<string>('BTCUSDT');
   const [futuresSymbols, setFuturesSymbols] = useState<FuturesSymbolInfo[]>([]);
@@ -113,6 +116,12 @@ export default function App() {
   const [alerts, setAlerts] = useState<MarketAlert[]>([]);
   const [customAlerts, setCustomAlerts] = useState<{ id: string; targetPrice: number; condition: 'ABOVE' | 'BELOW' }[]>([]);
 
+  // Multi-Coin Screener State
+  const [screenerData, setScreenerData] = useState<ScreenerResponse | null>(null);
+  const [isScreenerLoading, setIsScreenerLoading] = useState<boolean>(false);
+  const [screenerError, setScreenerError] = useState<string | null>(null);
+  const screenerGenRef = useRef<number>(0);
+
   // Service & Race-Condition Refs
   const binanceServiceRef = useRef<BinanceDataService | null>(null);
   const activeSymbolRef = useRef<string>('BTCUSDT');
@@ -157,6 +166,36 @@ export default function App() {
         }
       } catch (err) {
         console.warn('Horizon chart fetch warning:', err);
+      }
+    },
+    []
+  );
+
+  const loadScreenerData = useCallback(
+    async (horizon: TradeHorizon, forceRefresh: boolean = false) => {
+      const reqGen = ++screenerGenRef.current;
+      setIsScreenerLoading(true);
+      setScreenerError(null);
+
+      try {
+        let data: ScreenerResponse;
+        if (binanceServiceRef.current) {
+          data = await binanceServiceRef.current.fetchTopCoinsScreener(horizon, 16, forceRefresh);
+        } else {
+          const refreshParam = forceRefresh ? '&refresh=1' : '';
+          const res = await fetch(`/api/binance/futures/screener?horizon=${horizon}&limit=16${refreshParam}`);
+          if (!res.ok) throw new Error('Failed to scan Binance Futures pairs');
+          data = (await res.json()) as ScreenerResponse;
+        }
+        if (reqGen !== screenerGenRef.current) return;
+        setScreenerData(data);
+      } catch (err: any) {
+        if (reqGen !== screenerGenRef.current) return;
+        setScreenerError(err?.message || 'Unable to complete live Futures market scan');
+      } finally {
+        if (reqGen === screenerGenRef.current) {
+          setIsScreenerLoading(false);
+        }
       }
     },
     []
@@ -319,13 +358,14 @@ export default function App() {
     }, 180000);
 
     service.connect('1h', initialSym);
+    loadScreenerData('5h', false);
 
     return () => {
       clearInterval(mtfInterval);
       service.destroy();
       binanceServiceRef.current = null;
     };
-  }, [loadFuturesTelemetry, loadHorizonChartData, loadRealMultiTimeframeSignals, loadHistoricalData]);
+  }, [loadFuturesTelemetry, loadHorizonChartData, loadRealMultiTimeframeSignals, loadHistoricalData, loadScreenerData]);
 
   // Switch active Futures symbol
   const handleSelectSymbol = useCallback(
@@ -384,6 +424,19 @@ export default function App() {
     if (activeTimeframe !== targetTf) {
       handleTimeframeChange(targetTf);
     }
+    loadScreenerData(horizon, false);
+  };
+
+  const handleSelectScreenerCoin = (entry: ScreenerSetupEntry) => {
+    if (entry.horizon !== activeHorizon) {
+      setActiveHorizon(entry.horizon);
+      const targetTf = HORIZON_CONFIG[entry.horizon].chartTf;
+      if (activeTimeframe !== targetTf) {
+        setActiveTimeframe(targetTf);
+      }
+    }
+    handleSelectSymbol(entry.symbol);
+    setViewMode('SIMPLE');
   };
 
   // 4. Sentinel Alerts Evaluator
@@ -647,6 +700,17 @@ export default function App() {
               <span>Simple Signal</span>
             </button>
             <button
+              onClick={() => setViewMode('SCREENER')}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                viewMode === 'SCREENER'
+                  ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-sm'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+              }`}
+            >
+              <BarChart3 className="w-3.5 h-3.5" />
+              <span>Top Coins Now</span>
+            </button>
+            <button
               onClick={() => setViewMode('PRO')}
               className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                 viewMode === 'PRO'
@@ -662,6 +726,8 @@ export default function App() {
           <p className="text-xs text-slate-500 dark:text-slate-400 font-mono tabular-nums">
             {viewMode === 'SIMPLE'
               ? `${activeSymbol} · Stable ${HORIZON_CONFIG[activeHorizon].label} setup locked on closed ${HORIZON_CONFIG[activeHorizon].chartTf} chart (${signalSetup?.totalCriteria ?? 20} criteria)`
+              : viewMode === 'SCREENER'
+              ? `Scanning Top ${screenerData?.scannedCount ?? 16} Liquid USD-M Futures Pairs · ${HORIZON_CONFIG[activeHorizon].label} · 20 Indicators + 7 Timeframes`
               : `${activeSymbol} · Full Quantitative Futures Terminal · Order Book & AI Synthesis`}
           </p>
         </div>
@@ -686,6 +752,21 @@ export default function App() {
             activePrediction={activePrediction}
             isDarkMode={isDarkMode}
             onSwitchToPro={() => setViewMode('PRO')}
+            topCoins={screenerData?.setups}
+            isTopCoinsLoading={isScreenerLoading}
+            onOpenScreener={() => setViewMode('SCREENER')}
+            onSelectScreenerCoin={handleSelectScreenerCoin}
+          />
+        ) : viewMode === 'SCREENER' ? (
+          <TopCoinsScreener
+            screenerData={screenerData}
+            isLoading={isScreenerLoading}
+            error={screenerError}
+            activeHorizon={activeHorizon}
+            activeSymbol={activeSymbol}
+            onChangeHorizon={(h) => handleSelectHorizon(h)}
+            onRefresh={() => loadScreenerData(activeHorizon, true)}
+            onSelectCoin={handleSelectScreenerCoin}
           />
         ) : (
           <>

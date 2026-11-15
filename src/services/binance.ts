@@ -6,6 +6,8 @@ import {
   ChartTimeframe,
   FuturesMarketMetrics,
   FuturesSymbolInfo,
+  TradeHorizon,
+  ScreenerResponse,
 } from '../types/crypto';
 
 export type ConnectionStatus = 'CONNECTED' | 'RECONNECTING' | 'DISCONNECTED' | 'ERROR';
@@ -272,6 +274,20 @@ export class BinanceDataService {
     } catch {
       return null;
     }
+  }
+
+  // Fetch multi-coin Top Futures Screener scored with exact 20-indicator + MTF engine
+  public async fetchTopCoinsScreener(
+    horizon: TradeHorizon = '5h',
+    limit: number = 16,
+    forceRefresh: boolean = false
+  ): Promise<ScreenerResponse> {
+    const refreshParam = forceRefresh ? '&refresh=1' : '';
+    const res = await fetch(`/api/binance/futures/screener?horizon=${horizon}&limit=${limit}${refreshParam}`);
+    if (!res.ok) {
+      throw new Error('Failed to scan Binance Futures pairs');
+    }
+    return (await res.json()) as ScreenerResponse;
   }
 
   // Helper to parse order book

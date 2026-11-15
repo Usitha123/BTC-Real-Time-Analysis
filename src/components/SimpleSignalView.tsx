@@ -5,6 +5,7 @@ import {
   TechnicalIndicators,
   PredictionResult,
   TradeHorizon,
+  ScreenerSetupEntry,
 } from '../types/crypto';
 import {
   TradeSignalSetup,
@@ -67,6 +68,10 @@ interface SimpleSignalViewProps {
   activePrediction: PredictionResult | null;
   isDarkMode: boolean;
   onSwitchToPro: () => void;
+  topCoins?: ScreenerSetupEntry[];
+  isTopCoinsLoading?: boolean;
+  onOpenScreener?: () => void;
+  onSelectScreenerCoin?: (entry: ScreenerSetupEntry) => void;
 }
 
 type CriteriaFilter = 'All' | TechnicalCriterion['category'];
@@ -99,6 +104,10 @@ export const SimpleSignalView: React.FC<SimpleSignalViewProps> = ({
   activePrediction,
   isDarkMode,
   onSwitchToPro,
+  topCoins,
+  isTopCoinsLoading,
+  onOpenScreener,
+  onSelectScreenerCoin,
 }) => {
   const [criteriaFilter, setCriteriaFilter] = useState<CriteriaFilter>('All');
   const [accountEquity, setAccountEquity] = useState<number>(2000);
@@ -328,6 +337,77 @@ Criteria: ${signal.bullishCount} Bullish / ${signal.bearishCount} Bearish / ${si
           Locked on {signal.timeframe} close ({closedCandleLabel}) · Exit window {targetExitTime}
         </div>
       </section>
+
+      {/* Top Coins Quick Recommendations Strip */}
+      {(isTopCoinsLoading || (topCoins && topCoins.length > 0)) && onOpenScreener && (
+        <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+          <div className="px-5 py-3 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
+            <div className="text-xs font-semibold text-slate-800 dark:text-slate-200">
+              Top Coins to Trade Now ({HORIZON_CONFIG[activeHorizon].shortLabel} · Ranked by 20 Indicators & MTF)
+            </div>
+            <button
+              onClick={onOpenScreener}
+              className="text-xs font-semibold text-amber-600 dark:text-amber-400 hover:underline inline-flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              <span>Open Full {topCoins?.length || 16}-Coin Screener</span>
+              <ArrowUpRight className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
+          {topCoins && topCoins.length > 0 ? (
+            <div className="grid grid-cols-1 md:grid-cols-3 divide-y md:divide-y-0 md:divide-x divide-slate-200 dark:divide-slate-800">
+              {topCoins.slice(0, 3).map((pick, i) => {
+                const pBuy = pick.action === 'BUY';
+                const pSell = pick.action === 'SELL';
+                return (
+                  <button
+                    key={pick.symbol}
+                    onClick={() => onSelectScreenerCoin?.(pick)}
+                    className="p-4 text-left hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors cursor-pointer space-y-1.5"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-sm font-bold font-mono text-slate-900 dark:text-slate-100">
+                        #{i + 1} {pick.baseAsset}/USDT
+                      </span>
+                      <span
+                        className={`text-xs font-bold font-mono ${
+                          pBuy
+                            ? 'text-emerald-600 dark:text-emerald-400'
+                            : pSell
+                            ? 'text-rose-600 dark:text-rose-400'
+                            : 'text-amber-600 dark:text-amber-400'
+                        }`}
+                      >
+                        {pick.action} · {pick.confidenceScore}%
+                      </span>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs font-mono tabular-nums">
+                      <span className="text-slate-600 dark:text-slate-300">
+                        Entry ${formatCompactCoinPrice(pick.entryPrice, pick.entryPrice, pick.pricePrecision)}
+                      </span>
+                      <span className="text-emerald-600 dark:text-emerald-400">
+                        TP1 ${formatCompactCoinPrice(pick.takeProfit1, pick.entryPrice, pick.pricePrecision)}
+                      </span>
+                      <span className="text-rose-600 dark:text-rose-400">
+                        SL ${formatCompactCoinPrice(pick.stopLoss, pick.entryPrice, pick.pricePrecision)}
+                      </span>
+                    </div>
+
+                    <div className="text-[11px] font-mono tabular-nums text-slate-500 dark:text-slate-400">
+                      {pick.bullishCount}B / {pick.bearishCount}S of {pick.totalCriteria} · Win {pick.backtestWinRate}% · {pick.recommendedLeverage}x Iso
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="px-5 py-3 text-xs font-mono text-slate-500 dark:text-slate-400">
+              Scanning top liquid USD-M Perpetual pairs across all 20 indicators & 7 timeframes...
+            </div>
+          )}
+        </section>
+      )}
 
       {/* Active Locked Trade Plan Banner */}
       {lockedPlan && (

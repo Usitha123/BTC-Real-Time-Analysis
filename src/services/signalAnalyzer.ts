@@ -5,6 +5,8 @@ import {
   ChartTimeframe,
   TradeHorizon,
   FuturesMarketMetrics,
+  CriterionSignal,
+  TechnicalCriterion,
 } from '../types/crypto';
 import {
   calculateAllIndicators,
@@ -19,17 +21,7 @@ import {
   formatCompactCoinPrice,
 } from '../utils/formatters';
 
-export type CriterionSignal = 'BULLISH' | 'BEARISH' | 'NEUTRAL';
-
-export interface TechnicalCriterion {
-  id: string;
-  name: string;
-  category: 'Trend' | 'Momentum' | 'Volatility' | 'Volume' | 'Chart Structure' | 'Futures';
-  value: string;
-  signal: CriterionSignal;
-  weight: number;
-  reason: string;
-}
+export type { CriterionSignal, TechnicalCriterion };
 
 export type EntryStatus = 'ENTER_NOW' | 'WAIT_PULLBACK' | 'WAIT_BREAKOUT';
 
