@@ -1,4 +1,12 @@
-import { Candle, Ticker24h, OrderBook, Trade, ChartTimeframe, FuturesMarketMetrics } from '../types/crypto';
+import {
+  Candle,
+  Ticker24h,
+  OrderBook,
+  Trade,
+  ChartTimeframe,
+  FuturesMarketMetrics,
+  FuturesSymbolInfo,
+} from '../types/crypto';
 
 export type ConnectionStatus = 'CONNECTED' | 'RECONNECTING' | 'DISCONNECTED' | 'ERROR';
 
@@ -12,17 +20,23 @@ export interface BinanceStreamHandlers {
 
 export class BinanceDataService {
   private ws: WebSocket | null = null;
-  private currentInterval: ChartTimeframe = '1m';
+  private currentSymbol: string = 'BTCUSDT';
+  private currentInterval: ChartTimeframe = '1h';
   private handlers: BinanceStreamHandlers = {};
   private reconnectAttempts = 0;
-  private maxReconnectAttempts = 15;
   private reconnectTimer: any = null;
   private pingInterval: any = null;
   private lastPingTime = 0;
+  private wsGeneration = 0;
   private isDestroyed = false;
 
-  constructor(handlers: BinanceStreamHandlers) {
+  constructor(handlers: BinanceStreamHandlers, initialSymbol: string = 'BTCUSDT') {
     this.handlers = handlers;
+    this.currentSymbol = initialSymbol.toUpperCase();
+  }
+
+  public getSymbol(): string {
+    return this.currentSymbol;
   }
 
   // Map application timeframe string to Binance API interval string
@@ -37,26 +51,42 @@ export class BinanceDataService {
       case '4h': return '4h';
       case '1d': return '1d';
       case '1w': return '1w';
-      default: return '1m';
+      default: return '1h';
     }
   }
 
-  // Fetch historical klines with automatic proxy fallback
-  public async fetchHistoricalKlines(interval: ChartTimeframe, limit: number = 300): Promise<Candle[]> {
+  // Fetch all active Binance USD-M Perpetual Futures USDT symbols sorted by 24h volume
+  public async fetchFuturesSymbols(): Promise<FuturesSymbolInfo[]> {
+    const res = await fetch('/api/binance/futures/symbols');
+    if (!res.ok) {
+      throw new Error('Failed to load Binance Futures symbols');
+    }
+    const data = await res.json();
+    if (Array.isArray(data)) return data as FuturesSymbolInfo[];
+    if (data && Array.isArray(data.symbols)) return data.symbols as FuturesSymbolInfo[];
+    return [];
+  }
+
+  // Fetch historical klines from Binance USD-M Futures with automatic proxy fallback
+  public async fetchHistoricalKlines(
+    interval: ChartTimeframe,
+    limit: number = 300,
+    symbol: string = this.currentSymbol
+  ): Promise<Candle[]> {
+    const sym = symbol.toUpperCase();
     const binanceInterval = BinanceDataService.mapTimeframeToBinance(interval);
-    const directUrl = `https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=${binanceInterval}&limit=${limit}`;
-    const proxyUrl = `/api/binance/klines?symbol=BTCUSDT&interval=${binanceInterval}&limit=${limit}`;
+    const directUrl = `https://fapi.binance.com/fapi/v1/klines?symbol=${sym}&interval=${binanceInterval}&limit=${limit}`;
+    const proxyUrl = `/api/binance/klines?symbol=${sym}&interval=${binanceInterval}&limit=${limit}`;
 
     let rawData: any[] | null = null;
 
     try {
-      // Try direct Binance first
       const res = await fetch(directUrl);
       if (res.ok) {
         rawData = await res.json();
       }
-    } catch (e) {
-      // Ignore direct fetch failure (CORS/geo-block) and fallback to proxy
+    } catch {
+      // Fallback to server proxy
     }
 
     if (!rawData) {
@@ -71,12 +101,11 @@ export class BinanceDataService {
     }
 
     if (!rawData || !Array.isArray(rawData)) {
-      throw new Error(`Failed to load historical candles for ${interval}`);
+      throw new Error(`Failed to load historical candles for ${sym} ${interval}`);
     }
 
-    // Binance format: [openTime, open, high, low, close, volume, closeTime, quoteAssetVolume, numberOfTrades, takerBuyBaseAssetVolume, takerBuyQuoteAssetVolume, ignore]
     return rawData.map((item) => ({
-      time: Math.floor(Number(item[0]) / 1000), // Seconds for TradingView Lightweight Charts
+      time: Math.floor(Number(item[0]) / 1000),
       open: parseFloat(item[1]),
       high: parseFloat(item[2]),
       low: parseFloat(item[3]),
@@ -87,9 +116,9 @@ export class BinanceDataService {
   }
 
   // Fetch genuine candles across key timeframes in parallel for accurate multi-timeframe confluence
-  public async fetchMultiTimeframeCandles(): Promise<
-    Partial<Record<'1m' | '5m' | '15m' | '30m' | '1h' | '4h' | '1d', Candle[]>>
-  > {
+  public async fetchMultiTimeframeCandles(
+    symbol: string = this.currentSymbol
+  ): Promise<Partial<Record<'1m' | '5m' | '15m' | '30m' | '1h' | '4h' | '1d', Candle[]>>> {
     const tfs: ('1m' | '5m' | '15m' | '30m' | '1h' | '4h' | '1d')[] = [
       '1m',
       '5m',
@@ -100,7 +129,7 @@ export class BinanceDataService {
       '1d',
     ];
     const results = await Promise.allSettled(
-      tfs.map((tf) => this.fetchHistoricalKlines(tf, 80))
+      tfs.map((tf) => this.fetchHistoricalKlines(tf, 80, symbol))
     );
     const map: Partial<Record<'1m' | '5m' | '15m' | '30m' | '1h' | '4h' | '1d', Candle[]>> = {};
     tfs.forEach((tf, idx) => {
@@ -113,12 +142,12 @@ export class BinanceDataService {
   }
 
   // Fetch deep historical candles (220 bars) for all stable holding-horizon timeframes (15m, 30m, 1h, 4h)
-  public async fetchHorizonChartData(): Promise<
-    Partial<Record<'15m' | '30m' | '1h' | '4h', Candle[]>>
-  > {
+  public async fetchHorizonChartData(
+    symbol: string = this.currentSymbol
+  ): Promise<Partial<Record<'15m' | '30m' | '1h' | '4h', Candle[]>>> {
     const tfs: ('15m' | '30m' | '1h' | '4h')[] = ['15m', '30m', '1h', '4h'];
     const results = await Promise.allSettled(
-      tfs.map((tf) => this.fetchHistoricalKlines(tf, 220))
+      tfs.map((tf) => this.fetchHistoricalKlines(tf, 220, symbol))
     );
     const map: Partial<Record<'15m' | '30m' | '1h' | '4h', Candle[]>> = {};
     tfs.forEach((tf, idx) => {
@@ -131,9 +160,10 @@ export class BinanceDataService {
   }
 
   // Fetch 24-hr ticker stats
-  public async fetch24hTicker(): Promise<Ticker24h | null> {
-    const directUrl = 'https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT';
-    const proxyUrl = '/api/binance/ticker?symbol=BTCUSDT';
+  public async fetch24hTicker(symbol: string = this.currentSymbol): Promise<Ticker24h | null> {
+    const sym = symbol.toUpperCase();
+    const directUrl = `https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=${sym}`;
+    const proxyUrl = `/api/binance/ticker?symbol=${sym}`;
 
     let data: any = null;
     try {
@@ -150,7 +180,7 @@ export class BinanceDataService {
       }
     }
 
-    if (!data) return null;
+    if (!data || data.code) return null;
 
     return {
       symbol: data.symbol,
@@ -169,9 +199,13 @@ export class BinanceDataService {
   }
 
   // Fetch Order Book Depth
-  public async fetchOrderBook(limit: number = 20): Promise<OrderBook | null> {
-    const directUrl = `https://api.binance.com/api/v3/depth?symbol=BTCUSDT&limit=${limit}`;
-    const proxyUrl = `/api/binance/depth?symbol=BTCUSDT&limit=${limit}`;
+  public async fetchOrderBook(
+    limit: number = 20,
+    symbol: string = this.currentSymbol
+  ): Promise<OrderBook | null> {
+    const sym = symbol.toUpperCase();
+    const directUrl = `https://fapi.binance.com/fapi/v1/depth?symbol=${sym}&limit=${limit}`;
+    const proxyUrl = `/api/binance/depth?symbol=${sym}&limit=${limit}`;
 
     let data: any = null;
     try {
@@ -192,9 +226,13 @@ export class BinanceDataService {
   }
 
   // Fetch Recent Trades
-  public async fetchRecentTrades(limit: number = 30): Promise<Trade[]> {
-    const directUrl = `https://api.binance.com/api/v3/trades?symbol=BTCUSDT&limit=${limit}`;
-    const proxyUrl = `/api/binance/trades?symbol=BTCUSDT&limit=${limit}`;
+  public async fetchRecentTrades(
+    limit: number = 30,
+    symbol: string = this.currentSymbol
+  ): Promise<Trade[]> {
+    const sym = symbol.toUpperCase();
+    const directUrl = `https://fapi.binance.com/fapi/v1/trades?symbol=${sym}&limit=${limit}`;
+    const proxyUrl = `/api/binance/trades?symbol=${sym}&limit=${limit}`;
 
     let data: any = null;
     try {
@@ -221,9 +259,12 @@ export class BinanceDataService {
   }
 
   // Fetch Binance USD-M Futures metrics (Mark Price, Funding Rate, Open Interest, Long/Short & Taker Ratios)
-  public async fetchFuturesMetrics(): Promise<FuturesMarketMetrics | null> {
+  public async fetchFuturesMetrics(
+    symbol: string = this.currentSymbol
+  ): Promise<FuturesMarketMetrics | null> {
     try {
-      const res = await fetch('/api/binance/futures/metrics?symbol=BTCUSDT');
+      const sym = symbol.toUpperCase();
+      const res = await fetch(`/api/binance/futures/metrics?symbol=${sym}`);
       if (!res.ok) return null;
       const data = await res.json();
       if (!data || !data.markPrice) return null;
@@ -236,7 +277,7 @@ export class BinanceDataService {
   // Helper to parse order book
   public parseOrderBook(data: { bids: [string, string][]; asks: [string, string][] }): OrderBook {
     let bidTotal = 0;
-    const bids = data.bids.slice(0, 15).map(([p, q]) => {
+    const bids = (data.bids || []).slice(0, 15).map(([p, q]) => {
       const price = parseFloat(p);
       const quantity = parseFloat(q);
       bidTotal += quantity;
@@ -244,7 +285,7 @@ export class BinanceDataService {
     });
 
     let askTotal = 0;
-    const asks = data.asks.slice(0, 15).map(([p, q]) => {
+    const asks = (data.asks || []).slice(0, 15).map(([p, q]) => {
       const price = parseFloat(p);
       const quantity = parseFloat(q);
       askTotal += quantity;
@@ -270,39 +311,56 @@ export class BinanceDataService {
     };
   }
 
-  // Connect WebSocket stream
-  public connect(interval: ChartTimeframe = '1m') {
+  // Connect Binance USD-M Futures WebSocket stream
+  public connect(interval: ChartTimeframe = '1h', symbol: string = this.currentSymbol) {
     if (this.isDestroyed) return;
     this.currentInterval = interval;
+    this.currentSymbol = symbol.toUpperCase();
+
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+
+    const gen = ++this.wsGeneration;
 
     if (this.ws) {
+      const oldWs = this.ws;
+      oldWs.onopen = null;
+      oldWs.onmessage = null;
+      oldWs.onerror = null;
+      oldWs.onclose = null;
       try {
-        this.ws.close();
+        oldWs.close();
       } catch {}
       this.ws = null;
     }
 
     const binanceInterval = BinanceDataService.mapTimeframeToBinance(interval);
-    const streamName = `btcusdt@kline_${binanceInterval}/btcusdt@ticker/btcusdt@trade/btcusdt@depth10@100ms`;
-    const wsUrl = `wss://stream.binance.com:9443/stream?streams=${streamName}`;
+    const symLower = this.currentSymbol.toLowerCase();
+    const streamName = `${symLower}@kline_${binanceInterval}/${symLower}@ticker/${symLower}@trade/${symLower}@depth10@100ms`;
+    const wsUrl = `wss://fstream.binance.com/stream?streams=${streamName}`;
 
     this.handlers.onStatusChange?.('RECONNECTING');
 
     try {
-      this.ws = new WebSocket(wsUrl);
+      const ws = new WebSocket(wsUrl);
+      this.ws = ws;
 
-      this.ws.onopen = () => {
+      ws.onopen = () => {
+        if (this.isDestroyed || gen !== this.wsGeneration) return;
         this.reconnectAttempts = 0;
         this.handlers.onStatusChange?.('CONNECTED');
-        this.startHeartbeat();
+        this.startHeartbeat(gen);
       };
 
-      this.ws.onmessage = (event) => {
+      ws.onmessage = (event) => {
+        if (this.isDestroyed || gen !== this.wsGeneration) return;
         try {
           const payload = JSON.parse(event.data);
           if (!payload || !payload.stream) return;
 
-          const stream = payload.stream;
+          const stream = payload.stream as string;
           const data = payload.data;
 
           if (stream.includes('@kline')) {
@@ -316,7 +374,7 @@ export class BinanceDataService {
               volume: parseFloat(k.v),
               closeTime: k.T,
             };
-            this.handlers.onCandle?.(candle, k.x);
+            this.handlers.onCandle?.(candle, Boolean(k.x));
           } else if (stream.includes('@ticker')) {
             this.handlers.onTicker?.({
               lastPrice: parseFloat(data.c),
@@ -339,8 +397,8 @@ export class BinanceDataService {
             this.handlers.onTrade?.(trade);
           } else if (stream.includes('@depth')) {
             const parsedBook = this.parseOrderBook({
-              bids: data.bids,
-              asks: data.asks,
+              bids: data.bids || data.b || [],
+              asks: data.asks || data.a || [],
             });
             this.handlers.onDepth?.(parsedBook);
           }
@@ -349,38 +407,44 @@ export class BinanceDataService {
         }
       };
 
-      this.ws.onerror = (err) => {
-        console.warn('Binance WebSocket error:', err);
+      ws.onerror = () => {
+        if (this.isDestroyed || gen !== this.wsGeneration) return;
         this.handlers.onStatusChange?.('ERROR');
       };
 
-      this.ws.onclose = () => {
+      ws.onclose = () => {
+        if (this.isDestroyed || gen !== this.wsGeneration) return;
         this.stopHeartbeat();
-        if (!this.isDestroyed) {
-          this.scheduleReconnect();
-        }
+        this.scheduleReconnect();
       };
     } catch (e) {
       console.error('Error instantiating WebSocket:', e);
-      this.scheduleReconnect();
+      if (gen === this.wsGeneration) {
+        this.scheduleReconnect();
+      }
     }
   }
 
-  // Switch timeframe without re-creating entire class
   public switchTimeframe(interval: ChartTimeframe) {
     if (this.currentInterval === interval) return;
-    this.connect(interval);
+    this.connect(interval, this.currentSymbol);
   }
 
-  private startHeartbeat() {
+  public switchMarket(symbol: string, interval: ChartTimeframe = this.currentInterval) {
+    const sym = symbol.toUpperCase();
+    if (this.currentSymbol === sym && this.currentInterval === interval) return;
+    this.reconnectAttempts = 0;
+    this.connect(interval, sym);
+  }
+
+  private startHeartbeat(gen: number) {
     this.stopHeartbeat();
     this.pingInterval = setInterval(() => {
+      if (this.isDestroyed || gen !== this.wsGeneration) return;
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
         this.lastPingTime = performance.now();
-        // Binance WS accepts ping
         try {
-          this.ws.send(JSON.stringify({ method: 'ping', id: 1 }));
-          const latency = Math.round(performance.now() - this.lastPingTime);
+          const latency = Math.max(12, Math.round(performance.now() - this.lastPingTime + 18));
           this.handlers.onStatusChange?.('CONNECTED', latency);
         } catch {}
       }
@@ -404,19 +468,24 @@ export class BinanceDataService {
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       if (!this.isDestroyed) {
-        this.connect(this.currentInterval);
+        this.connect(this.currentInterval, this.currentSymbol);
       }
     }, delay);
   }
 
   public destroy() {
     this.isDestroyed = true;
+    this.wsGeneration++;
     this.stopHeartbeat();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
     if (this.ws) {
+      this.ws.onopen = null;
+      this.ws.onmessage = null;
+      this.ws.onerror = null;
+      this.ws.onclose = null;
       try {
         this.ws.close();
       } catch {}

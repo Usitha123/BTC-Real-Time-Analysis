@@ -227,3 +227,14 @@ export interface FuturesMarketMetrics {
   takerBuySellRatio: number;
   fetchedAt: number;
 }
+
+export interface FuturesSymbolInfo {
+  symbol: string;
+  baseAsset: string;
+  quoteAsset: string;
+  pricePrecision: number;
+  quantityPrecision: number;
+  lastPrice: number;
+  priceChangePercent: number;
+  quoteVolume: number;
+}

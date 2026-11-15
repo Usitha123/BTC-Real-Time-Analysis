@@ -1,4 +1,9 @@
 import { Candle, TechnicalIndicators, PredictionResult, PredictionTimeframe } from '../types/crypto';
+import {
+  getPriceDecimals,
+  roundToPricePrecision,
+  formatCompactCoinPrice,
+} from '../utils/formatters';
 
 // Timeframe duration in milliseconds
 export const TIMEFRAME_DURATIONS_MS: Record<PredictionTimeframe, number> = {
@@ -25,11 +30,17 @@ export function generateTimeframePrediction(
   timeframe: PredictionTimeframe,
   candles: Candle[],
   indicators: TechnicalIndicators,
-  currentPrice: number
+  currentPrice: number,
+  pricePrecision?: number
 ): PredictionResult | null {
   if (!candles || candles.length < 50 || !indicators || !currentPrice || isNaN(currentPrice)) {
     return null;
   }
+
+  const decimals = getPriceDecimals(currentPrice, pricePrecision);
+  const rp = (v: number) => roundToPricePrecision(v, currentPrice, decimals);
+  const fp = (v: number) => formatCompactCoinPrice(v, currentPrice, decimals);
+  const histDecimals = Math.max(2, decimals);
 
   const durationMs = TIMEFRAME_DURATIONS_MS[timeframe];
   const now = Date.now();
@@ -58,19 +69,19 @@ export function generateTimeframePrediction(
   // MACD Contribution
   if (indicators.macd.hist > 0) {
     momentumScore += 0.25;
-    supportingIndicators.push(`MACD histogram positive (+${indicators.macd.hist.toFixed(1)})`);
+    supportingIndicators.push(`MACD histogram positive (+${indicators.macd.hist.toFixed(histDecimals)})`);
   } else if (indicators.macd.hist < 0) {
     momentumScore -= 0.25;
-    mainRisks.push(`MACD histogram negative (${indicators.macd.hist.toFixed(1)})`);
+    mainRisks.push(`MACD histogram negative (${indicators.macd.hist.toFixed(histDecimals)})`);
   }
 
   // EMA Structure
   if (currentPrice > indicators.ema20 && indicators.ema9 > indicators.ema20) {
     momentumScore += 0.3;
-    supportingIndicators.push(`Price holding above EMA9/20 cluster ($${indicators.ema20.toFixed(0)})`);
+    supportingIndicators.push(`Price holding above EMA9/20 cluster ($${fp(indicators.ema20)})`);
   } else if (currentPrice < indicators.ema20 && indicators.ema9 < indicators.ema20) {
     momentumScore -= 0.3;
-    mainRisks.push(`Price suppressed beneath EMA9/20 cluster ($${indicators.ema20.toFixed(0)})`);
+    mainRisks.push(`Price suppressed beneath EMA9/20 cluster ($${fp(indicators.ema20)})`);
   }
 
   // Volume & OBV
@@ -84,9 +95,9 @@ export function generateTimeframePrediction(
 
   // Bollinger Bands position
   if (indicators.bollinger.percentB > 0.85) {
-    mainRisks.push(`Proximity to Upper 2σ Bollinger ($${indicators.bollinger.upper.toFixed(0)}) resistance`);
+    mainRisks.push(`Proximity to Upper 2σ Bollinger ($${fp(indicators.bollinger.upper)}) resistance`);
   } else if (indicators.bollinger.percentB < 0.15) {
-    supportingIndicators.push(`Near Lower 2σ Bollinger ($${indicators.bollinger.lower.toFixed(0)}) statistical floor`);
+    supportingIndicators.push(`Near Lower 2σ Bollinger ($${fp(indicators.bollinger.lower)}) statistical floor`);
   }
 
   // ADX trend strength dampener or amplifier
@@ -120,30 +131,24 @@ export function generateTimeframePrediction(
   else if (expectedChangePct < -0.04) direction = 'DOWN';
 
   // Predicted Price
-  const predictedPrice = parseFloat((currentPrice * (1 + expectedChangePct / 100)).toFixed(2));
+  const predictedPrice = rp(currentPrice * (1 + expectedChangePct / 100));
 
   // Uncertainty Envelope (Standard Deviation range) using ATR
   const volatilityRangeDollar = indicators.atr * Math.sqrt(horizonMinutes) * 0.75;
-  const lowerBound = parseFloat(Math.min(currentPrice * 0.999, predictedPrice - volatilityRangeDollar).toFixed(2));
-  const upperBound = parseFloat(Math.max(currentPrice * 1.001, predictedPrice + volatilityRangeDollar).toFixed(2));
+  const lowerBound = rp(Math.min(currentPrice * 0.999, predictedPrice - volatilityRangeDollar));
+  const upperBound = rp(Math.max(currentPrice * 1.001, predictedPrice + volatilityRangeDollar));
 
-  // Calibrated Confidence
-  // Base confidence modified by:
-  // - High momentum confluence (+1 to +5%)
-  // - Conflict penalty (-3 to -8%)
-  // - High volatility penalty (-2 to -5%)
   let confidence = BASE_CALIBRATION_CONFIDENCE[timeframe];
   if (Math.abs(momentumScore) > 0.5) confidence += 4.5;
   else if (Math.abs(momentumScore) < 0.2) confidence -= 5.0;
 
   if (indicators.bollinger.bandWidth > 0.04) {
-    confidence -= 3.5; // High volatility penalty
+    confidence -= 3.5;
   }
 
-  // Keep within statistically valid bounds (52% to 78%) - no fabricated 99% claims!
   confidence = parseFloat(Math.min(78.5, Math.max(52.0, confidence)).toFixed(1));
 
-  let calibrationStatus: 'EMPIRICALLY_CALIBRATED' | 'HIGH_VOLATILITY_ADJUSTED' | 'CALIBRATING' =
+  const calibrationStatus: 'EMPIRICALLY_CALIBRATED' | 'HIGH_VOLATILITY_ADJUSTED' | 'CALIBRATING' =
     indicators.bollinger.bandWidth > 0.04 ? 'HIGH_VOLATILITY_ADJUSTED' : 'EMPIRICALLY_CALIBRATED';
 
   if (supportingIndicators.length === 0) {
@@ -168,7 +173,7 @@ export function generateTimeframePrediction(
     expiryTimestamp,
     statisticalMetrics: {
       drift: expectedChangePct,
-      volatilityRange: parseFloat(volatilityRangeDollar.toFixed(2)),
+      volatilityRange: rp(volatilityRangeDollar),
       momentumScore: parseFloat(momentumScore.toFixed(3)),
       reversionForce: parseFloat((indicators.bollinger.percentB - 0.5).toFixed(3)),
     },
@@ -178,13 +183,14 @@ export function generateTimeframePrediction(
 export function generateAllTimeframePredictions(
   candles: Candle[],
   indicators: TechnicalIndicators,
-  currentPrice: number
+  currentPrice: number,
+  pricePrecision?: number
 ): Record<PredictionTimeframe, PredictionResult | null> {
   const timeframes: PredictionTimeframe[] = ['1m', '5m', '10m', '15m', '30m', '60m'];
   const results = {} as Record<PredictionTimeframe, PredictionResult | null>;
 
   timeframes.forEach((tf) => {
-    results[tf] = generateTimeframePrediction(tf, candles, indicators, currentPrice);
+    results[tf] = generateTimeframePrediction(tf, candles, indicators, currentPrice, pricePrecision);
   });
 
   return results;

@@ -20,6 +20,7 @@ import {
   PredictionRecord,
   TradeHorizon,
   FuturesMarketMetrics,
+  FuturesSymbolInfo,
 } from './types/crypto';
 import { BinanceDataService, ConnectionStatus } from './services/binance';
 import { calculateAllIndicators } from './services/indicators';
@@ -27,6 +28,7 @@ import { generateAllTimeframePredictions } from './services/predictionEngine';
 import { HistoryStorageService } from './services/historyStorage';
 import { computeAllMultiTimeframeSignals, evaluateTimeframe } from './services/multiTimeframe';
 import { analyzeAllHorizons, getStrictlyClosedCandles, HORIZON_CONFIG } from './services/signalAnalyzer';
+import { formatCoinPrice, getBaseAssetFromSymbol } from './utils/formatters';
 
 import { Header } from './components/Header';
 import { SimpleSignalView } from './components/SimpleSignalView';
@@ -43,10 +45,12 @@ import { FuturesExecutionPanel } from './components/FuturesExecutionPanel';
 import { ShieldAlert, LayoutGrid, SlidersHorizontal } from 'lucide-react';
 
 export default function App() {
-  // Theme & View state
+  // Theme, View & Selected Futures Market State
   const [isDarkMode, setIsDarkMode] = useState<boolean>(true);
   const [viewMode, setViewMode] = useState<'SIMPLE' | 'PRO'>('SIMPLE');
   const [activeHorizon, setActiveHorizon] = useState<TradeHorizon>('5h');
+  const [activeSymbol, setActiveSymbol] = useState<string>('BTCUSDT');
+  const [futuresSymbols, setFuturesSymbols] = useState<FuturesSymbolInfo[]>([]);
 
   // Market Data States
   const [candles, setCandles] = useState<Candle[]>([]);
@@ -109,171 +113,268 @@ export default function App() {
   const [alerts, setAlerts] = useState<MarketAlert[]>([]);
   const [customAlerts, setCustomAlerts] = useState<{ id: string; targetPrice: number; condition: 'ABOVE' | 'BELOW' }[]>([]);
 
-  // Service Reference
+  // Service & Race-Condition Refs
   const binanceServiceRef = useRef<BinanceDataService | null>(null);
+  const activeSymbolRef = useRef<string>('BTCUSDT');
+  const marketLoadGenRef = useRef<number>(0);
   const isInitialFetchDone = useRef(false);
   const lastRecordedPredictionRef = useRef<number>(0);
+
+  const activeSymbolInfo = useMemo(
+    () => futuresSymbols.find((s) => s.symbol === activeSymbol) || null,
+    [futuresSymbols, activeSymbol]
+  );
+  const pricePrecision = activeSymbolInfo?.pricePrecision;
+  const baseAsset = getBaseAssetFromSymbol(activeSymbol);
 
   // Sync dark mode class on root html element for Tailwind v4 dark: variants
   useEffect(() => {
     document.documentElement.classList.toggle('dark', isDarkMode);
   }, [isDarkMode]);
 
-  // 1. Initialize & Connect to Binance
+  const loadFuturesTelemetry = useCallback(
+    async (service: BinanceDataService, symbol: string, gen: number) => {
+      try {
+        const fm = await service.fetchFuturesMetrics(symbol);
+        if (gen !== marketLoadGenRef.current || activeSymbolRef.current !== symbol) return;
+        if (fm) {
+          setFuturesMetrics(fm);
+        }
+      } catch (err) {
+        console.warn('Futures telemetry fetch warning:', err);
+      }
+    },
+    []
+  );
+
+  const loadHorizonChartData = useCallback(
+    async (service: BinanceDataService, symbol: string, gen: number) => {
+      try {
+        const map = await service.fetchHorizonChartData(symbol);
+        if (gen !== marketLoadGenRef.current || activeSymbolRef.current !== symbol) return;
+        if (Object.keys(map).length > 0) {
+          setHorizonCandlesMap(map);
+        }
+      } catch (err) {
+        console.warn('Horizon chart fetch warning:', err);
+      }
+    },
+    []
+  );
+
+  const loadRealMultiTimeframeSignals = useCallback(
+    async (service: BinanceDataService, symbol: string, gen: number) => {
+      try {
+        const mtfCandles = await service.fetchMultiTimeframeCandles(symbol);
+        if (gen !== marketLoadGenRef.current || activeSymbolRef.current !== symbol) return;
+
+        const tfs: ('1m' | '5m' | '15m' | '30m' | '1h' | '4h' | '1d')[] = [
+          '1m',
+          '5m',
+          '15m',
+          '30m',
+          '1h',
+          '4h',
+          '1d',
+        ];
+        const realSignals: MultiTimeframeSignal[] = tfs
+          .map((tf) => {
+            const list = mtfCandles[tf];
+            const closedList = list ? getStrictlyClosedCandles(list) : [];
+            return closedList.length >= 15 ? evaluateTimeframe(tf, closedList) : null;
+          })
+          .filter((s): s is MultiTimeframeSignal => s !== null);
+
+        if (realSignals.length >= 4) {
+          setMultiTfSignals(realSignals);
+        }
+      } catch (err) {
+        console.warn('MTF refresh warning:', err);
+      }
+    },
+    []
+  );
+
+  const loadHistoricalData = useCallback(
+    async (tf: ChartTimeframe, symbol: string = activeSymbolRef.current, gen: number = marketLoadGenRef.current) => {
+      try {
+        const service = binanceServiceRef.current;
+        if (!service) return;
+        const initialCandles = await service.fetchHistoricalKlines(tf, 250, symbol);
+        if (gen !== marketLoadGenRef.current || activeSymbolRef.current !== symbol) return;
+
+        if (initialCandles.length > 0) {
+          setCandles(initialCandles);
+          setClosedChartSnapshot(initialCandles);
+          const lastC = initialCandles[initialCandles.length - 1];
+          setCurrentPrice(lastC.close);
+          setPrevPrice(lastC.close);
+
+          service.fetch24hTicker(symbol).then((t) => {
+            if (t && gen === marketLoadGenRef.current && activeSymbolRef.current === symbol) {
+              setTicker(t);
+            }
+          });
+          service.fetchOrderBook(15, symbol).then((b) => {
+            if (b && gen === marketLoadGenRef.current && activeSymbolRef.current === symbol) {
+              setOrderBook(b);
+            }
+          });
+          service.fetchRecentTrades(20, symbol).then((tr) => {
+            if (tr && gen === marketLoadGenRef.current && activeSymbolRef.current === symbol) {
+              setTrades(tr);
+            }
+          });
+        }
+      } catch (err) {
+        console.error('Failed to load historical candles:', err);
+      }
+    },
+    []
+  );
+
+  // 1. Initialize & Connect to Binance Futures
   useEffect(() => {
-    // Initialize or seed historical prediction records
     HistoryStorageService.ensureInitialized(68000);
     setHistoryRecords(HistoryStorageService.getAllRecords());
     setPerfStats(HistoryStorageService.calculatePerformanceStats(historyFilter));
 
-    const service = new BinanceDataService({
-      onCandle: (candle, isClosed) => {
-        setCandles((prev) => {
-          if (prev.length === 0) return [candle];
-          const last = prev[prev.length - 1];
+    const service = new BinanceDataService(
+      {
+        onCandle: (candle, isClosed) => {
+          setCandles((prev) => {
+            if (prev.length === 0) return [candle];
+            const last = prev[prev.length - 1];
 
-          if (candle.time === last.time) {
-            // Update current active candle
-            const updated = [...prev];
-            updated[updated.length - 1] = candle;
-            if (isClosed) {
-              setClosedChartSnapshot(updated);
+            if (candle.time === last.time) {
+              const updated = [...prev];
+              updated[updated.length - 1] = candle;
+              if (isClosed) {
+                setClosedChartSnapshot(updated);
+              }
+              return updated;
+            } else if (candle.time > last.time) {
+              setClosedChartSnapshot(prev);
+              return [...prev.slice(-299), candle];
             }
-            return updated;
-          } else if (candle.time > last.time) {
-            // Previous candle finished; snapshot closed bars stably
-            setClosedChartSnapshot(prev);
-            return [...prev.slice(-299), candle];
-          }
-          return prev;
-        });
+            return prev;
+          });
 
-        setCurrentPrice((prevP) => {
-          setPrevPrice(prevP);
-          return candle.close;
-        });
-      },
-      onTicker: (partialTicker) => {
-        setTicker((prev) => (prev ? { ...prev, ...partialTicker } : (partialTicker as Ticker24h)));
-        if (partialTicker.lastPrice) {
           setCurrentPrice((prevP) => {
             setPrevPrice(prevP);
-            return partialTicker.lastPrice!;
+            return candle.close;
           });
-        }
+        },
+        onTicker: (partialTicker) => {
+          setTicker((prev) => (prev ? { ...prev, ...partialTicker } : (partialTicker as Ticker24h)));
+          if (partialTicker.lastPrice) {
+            setCurrentPrice((prevP) => {
+              setPrevPrice(prevP);
+              return partialTicker.lastPrice!;
+            });
+          }
+        },
+        onTrade: (trade) => {
+          setTrades((prev) => [trade, ...prev.slice(0, 24)]);
+        },
+        onDepth: (book) => {
+          setOrderBook(book);
+        },
+        onStatusChange: (status, latency) => {
+          setConnectionStatus(status);
+          if (latency !== undefined) setLatencyMs(latency);
+        },
       },
-      onTrade: (trade) => {
-        setTrades((prev) => [trade, ...prev.slice(0, 24)]);
-      },
-      onDepth: (book) => {
-        setOrderBook(book);
-      },
-      onStatusChange: (status, latency) => {
-        setConnectionStatus(status);
-        if (latency !== undefined) setLatencyMs(latency);
-      },
-    });
+      activeSymbolRef.current
+    );
 
     binanceServiceRef.current = service;
 
-    // Initial historical backfill (defaults to 1h chart for 5h trade horizon)
-    loadHistoricalData('1h');
-    loadRealMultiTimeframeSignals(service);
-    loadHorizonChartData(service);
-    loadFuturesTelemetry(service);
+    // Fetch all active USD-M Futures symbols for searchable header selector
+    service
+      .fetchFuturesSymbols()
+      .then((list) => {
+        if (list.length > 0) {
+          setFuturesSymbols(list);
+        }
+      })
+      .catch((err) => console.warn('Futures symbol list load warning:', err));
 
-    // Refresh MTF, Futures telemetry & closed horizon candles periodically (every 3 minutes)
+    const initialGen = ++marketLoadGenRef.current;
+    const initialSym = activeSymbolRef.current;
+
+    // Initial historical backfill (defaults to 1h chart for 5h trade horizon)
+    loadHistoricalData('1h', initialSym, initialGen);
+    loadRealMultiTimeframeSignals(service, initialSym, initialGen);
+    loadHorizonChartData(service, initialSym, initialGen);
+    loadFuturesTelemetry(service, initialSym, initialGen);
+
+    // Refresh MTF, Futures telemetry & closed horizon candles every 3 minutes for the currently selected symbol
     const mtfInterval = setInterval(() => {
-      loadRealMultiTimeframeSignals(service);
-      loadHorizonChartData(service);
-      loadFuturesTelemetry(service);
+      const currentSym = activeSymbolRef.current;
+      const currentGen = marketLoadGenRef.current;
+      loadRealMultiTimeframeSignals(service, currentSym, currentGen);
+      loadHorizonChartData(service, currentSym, currentGen);
+      loadFuturesTelemetry(service, currentSym, currentGen);
     }, 180000);
 
-    // Connect WebSocket
-    service.connect('1h');
+    service.connect('1h', initialSym);
 
     return () => {
       clearInterval(mtfInterval);
       service.destroy();
       binanceServiceRef.current = null;
     };
-  }, []);
+  }, [loadFuturesTelemetry, loadHorizonChartData, loadRealMultiTimeframeSignals, loadHistoricalData]);
 
-  const loadFuturesTelemetry = async (service: BinanceDataService) => {
-    try {
-      const fm = await service.fetchFuturesMetrics();
-      if (fm) {
-        setFuturesMetrics(fm);
+  // Switch active Futures symbol
+  const handleSelectSymbol = useCallback(
+    (newSymbol: string) => {
+      const sym = newSymbol.toUpperCase();
+      if (sym === activeSymbolRef.current) return;
+
+      const gen = ++marketLoadGenRef.current;
+      activeSymbolRef.current = sym;
+      setActiveSymbol(sym);
+
+      // Clear previous coin state so indicators/signals never mix prices across coins
+      setCandles([]);
+      setClosedChartSnapshot([]);
+      setHorizonCandlesMap({});
+      setTicker(null);
+      setCurrentPrice(0);
+      setPrevPrice(0);
+      setOrderBook(null);
+      setTrades([]);
+      setIndicators(null);
+      setMultiTfSignals([]);
+      setFuturesMetrics(null);
+      setPredictions({
+        '1m': null,
+        '5m': null,
+        '10m': null,
+        '15m': null,
+        '30m': null,
+        '60m': null,
+      });
+      setAiAnalysis(null);
+      isInitialFetchDone.current = false;
+
+      const service = binanceServiceRef.current;
+      if (service) {
+        service.switchMarket(sym, activeTimeframe);
+        loadHistoricalData(activeTimeframe, sym, gen);
+        loadRealMultiTimeframeSignals(service, sym, gen);
+        loadHorizonChartData(service, sym, gen);
+        loadFuturesTelemetry(service, sym, gen);
       }
-    } catch (err) {
-      console.warn('Futures telemetry fetch warning:', err);
-    }
-  };
-
-  const loadHorizonChartData = async (service: BinanceDataService) => {
-    try {
-      const map = await service.fetchHorizonChartData();
-      if (Object.keys(map).length > 0) {
-        setHorizonCandlesMap(map);
-      }
-    } catch (err) {
-      console.warn('Horizon chart fetch warning:', err);
-    }
-  };
-
-  const loadRealMultiTimeframeSignals = async (service: BinanceDataService) => {
-    try {
-      const mtfCandles = await service.fetchMultiTimeframeCandles();
-      const tfs: ('1m' | '5m' | '15m' | '30m' | '1h' | '4h' | '1d')[] = [
-        '1m',
-        '5m',
-        '15m',
-        '30m',
-        '1h',
-        '4h',
-        '1d',
-      ];
-      const realSignals: MultiTimeframeSignal[] = tfs
-        .map((tf) => {
-          const list = mtfCandles[tf];
-          const closedList = list ? getStrictlyClosedCandles(list) : [];
-          return closedList.length >= 15 ? evaluateTimeframe(tf, closedList) : null;
-        })
-        .filter((s): s is MultiTimeframeSignal => s !== null);
-
-      if (realSignals.length >= 4) {
-        setMultiTfSignals(realSignals);
-      }
-    } catch (err) {
-      console.warn('MTF refresh warning:', err);
-    }
-  };
-
-  // 2. Load Historical Candles when Timeframe Changes
-  const loadHistoricalData = async (tf: ChartTimeframe) => {
-    try {
-      if (!binanceServiceRef.current) return;
-      const initialCandles = await binanceServiceRef.current.fetchHistoricalKlines(tf, 250);
-      if (initialCandles.length > 0) {
-        setCandles(initialCandles);
-        setClosedChartSnapshot(initialCandles);
-        const lastC = initialCandles[initialCandles.length - 1];
-        setCurrentPrice(lastC.close);
-        setPrevPrice(lastC.close);
-
-        // Fetch initial ticker, depth, trades
-        binanceServiceRef.current.fetch24hTicker().then((t) => t && setTicker(t));
-        binanceServiceRef.current.fetchOrderBook(15).then((b) => b && setOrderBook(b));
-        binanceServiceRef.current.fetchRecentTrades(20).then((tr) => tr && setTrades(tr));
-      }
-    } catch (err) {
-      console.error('Failed to load historical candles:', err);
-    }
-  };
+    },
+    [activeTimeframe, loadHistoricalData, loadRealMultiTimeframeSignals, loadHorizonChartData, loadFuturesTelemetry]
+  );
 
   const handleTimeframeChange = (newTf: ChartTimeframe) => {
     setActiveTimeframe(newTf);
-    loadHistoricalData(newTf);
+    loadHistoricalData(newTf, activeSymbolRef.current, marketLoadGenRef.current);
     binanceServiceRef.current?.switchTimeframe(newTf);
   };
 
@@ -285,26 +386,101 @@ export default function App() {
     }
   };
 
+  // 4. Sentinel Alerts Evaluator
+  const evaluateMarketAlerts = useCallback(
+    (ind: TechnicalIndicators, price: number) => {
+      const newAlerts: MarketAlert[] = [];
+
+      if (ind.bollinger.bandWidth > 0.04) {
+        newAlerts.push({
+          id: `vol-${Date.now()}`,
+          title: 'High Volatility Regime Warning',
+          message: `${baseAsset} Bollinger BandWidth expanded to ${(ind.bollinger.bandWidth * 100).toFixed(2)}%. ATR is $${formatCoinPrice(ind.atr, price, pricePrecision)}.`,
+          type: 'VOLATILITY',
+          severity: 'WARNING',
+          timestamp: Date.now(),
+        });
+      }
+
+      if (ind.rsi > 75) {
+        newAlerts.push({
+          id: `rsi-ob-${Date.now()}`,
+          title: 'RSI Extreme Overbought (Exhaustion Risk)',
+          message: `${baseAsset} RSI-14 reached ${ind.rsi.toFixed(1)}. Bearish mean-reversion probability elevated.`,
+          type: 'RSI',
+          severity: 'ALERT',
+          timestamp: Date.now(),
+        });
+      } else if (ind.rsi < 25) {
+        newAlerts.push({
+          id: `rsi-os-${Date.now()}`,
+          title: 'RSI Extreme Oversold (Bounce Setup)',
+          message: `${baseAsset} RSI-14 depressed at ${ind.rsi.toFixed(1)}. Bullish relief bounce setup forming.`,
+          type: 'RSI',
+          severity: 'ALERT',
+          timestamp: Date.now(),
+        });
+      }
+
+      if (ind.volumeRatio > 2.2) {
+        newAlerts.push({
+          id: `vol-surge-${Date.now()}`,
+          title: 'Institutional Volume Surge',
+          message: `${baseAsset} volume is ${(ind.volumeRatio * 100).toFixed(0)}% of 20-period baseline.`,
+          type: 'VOLUME_SPIKE',
+          severity: 'INFO',
+          timestamp: Date.now(),
+        });
+      }
+
+      customAlerts.forEach((ca) => {
+        if (ca.condition === 'ABOVE' && price >= ca.targetPrice) {
+          newAlerts.push({
+            id: `cust-${ca.id}`,
+            title: 'Custom Price Alert Triggered',
+            message: `${baseAsset} reached above watched target: $${formatCoinPrice(ca.targetPrice, price, pricePrecision)} (Now $${formatCoinPrice(price, price, pricePrecision)})`,
+            type: 'CUSTOM',
+            severity: 'ALERT',
+            timestamp: Date.now(),
+          });
+        } else if (ca.condition === 'BELOW' && price <= ca.targetPrice) {
+          newAlerts.push({
+            id: `cust-${ca.id}`,
+            title: 'Custom Price Alert Triggered',
+            message: `${baseAsset} dropped below watched target: $${formatCoinPrice(ca.targetPrice, price, pricePrecision)} (Now $${formatCoinPrice(price, price, pricePrecision)})`,
+            type: 'CUSTOM',
+            severity: 'ALERT',
+            timestamp: Date.now(),
+          });
+        }
+      });
+
+      if (newAlerts.length > 0) {
+        setAlerts((prev) => {
+          const existingTitles = new Set(prev.map((a) => a.title));
+          const filteredNew = newAlerts.filter((a) => !existingTitles.has(a.title));
+          return [...filteredNew, ...prev.slice(0, 10)];
+        });
+      }
+    },
+    [baseAsset, pricePrecision, customAlerts]
+  );
+
   // 3. Indicator & Prediction Calculations on Candle Updates
   useEffect(() => {
     if (candles.length < 20 || currentPrice === 0) return;
 
-    // Calculate all indicators
     const calculated = calculateAllIndicators(candles);
     if (calculated) {
       setIndicators(calculated);
 
-      // Only fallback to local resampling if real multi-timeframe fetch hasn't populated yet
       setMultiTfSignals((prev) => (prev.length >= 4 ? prev : computeAllMultiTimeframeSignals(candles)));
 
-      // Generate 6 predictions
-      const newPredictions = generateAllTimeframePredictions(candles, calculated, currentPrice);
+      const newPredictions = generateAllTimeframePredictions(candles, calculated, currentPrice, pricePrecision);
       setPredictions(newPredictions);
 
-      // Sentinel Alert Engine Checks
       evaluateMarketAlerts(calculated, currentPrice);
 
-      // Periodically commit newly generated predictions to tracking storage (every 30 seconds)
       const now = Date.now();
       if (now - lastRecordedPredictionRef.current > 30000 && newPredictions['15m']) {
         lastRecordedPredictionRef.current = now;
@@ -312,7 +488,7 @@ export default function App() {
           const p = newPredictions[tf];
           if (p) {
             HistoryStorageService.addPrediction({
-              id: `pred-${tf}-${now}`,
+              id: `pred-${activeSymbol}-${tf}-${now}`,
               timestamp: now,
               actualPriceAtPrediction: p.currentPrice,
               predictedPrice: p.predictedPrice,
@@ -325,94 +501,11 @@ export default function App() {
         });
       }
 
-      // Automatically evaluate any expired pending predictions
       HistoryStorageService.evaluatePending(currentPrice);
       setHistoryRecords(HistoryStorageService.getAllRecords());
       setPerfStats(HistoryStorageService.calculatePerformanceStats(historyFilter));
     }
-  }, [candles, currentPrice]);
-
-  // 4. Sentinel Alerts Evaluator
-  const evaluateMarketAlerts = (ind: TechnicalIndicators, price: number) => {
-    const newAlerts: MarketAlert[] = [];
-
-    // Volatility Warning
-    if (ind.bollinger.bandWidth > 0.04) {
-      newAlerts.push({
-        id: `vol-${Date.now()}`,
-        title: 'High Volatility Regime Warning',
-        message: `Bollinger BandWidth expanded to ${(ind.bollinger.bandWidth * 100).toFixed(2)}%. ATR is $${ind.atr.toFixed(0)}.`,
-        type: 'VOLATILITY',
-        severity: 'WARNING',
-        timestamp: Date.now(),
-      });
-    }
-
-    // RSI Overbought / Oversold
-    if (ind.rsi > 75) {
-      newAlerts.push({
-        id: `rsi-ob-${Date.now()}`,
-        title: 'RSI Extreme Overbought (Exhaustion Risk)',
-        message: `RSI-14 reached ${ind.rsi.toFixed(1)}. Bearish mean-reversion probability elevated.`,
-        type: 'RSI',
-        severity: 'ALERT',
-        timestamp: Date.now(),
-      });
-    } else if (ind.rsi < 25) {
-      newAlerts.push({
-        id: `rsi-os-${Date.now()}`,
-        title: 'RSI Extreme Oversold (Bounce Setup)',
-        message: `RSI-14 depressed at ${ind.rsi.toFixed(1)}. Bullish relief bounce setup forming.`,
-        type: 'RSI',
-        severity: 'ALERT',
-        timestamp: Date.now(),
-      });
-    }
-
-    // Volume Surge
-    if (ind.volumeRatio > 2.2) {
-      newAlerts.push({
-        id: `vol-surge-${Date.now()}`,
-        title: 'Institutional Volume Surge',
-        message: `Current volume is ${(ind.volumeRatio * 100).toFixed(0)}% of 20-period baseline.`,
-        type: 'VOLUME_SPIKE',
-        severity: 'INFO',
-        timestamp: Date.now(),
-      });
-    }
-
-    // Check custom price alerts
-    customAlerts.forEach((ca) => {
-      if (ca.condition === 'ABOVE' && price >= ca.targetPrice) {
-        newAlerts.push({
-          id: `cust-${ca.id}`,
-          title: 'Custom Price Alert Triggered',
-          message: `BTC reached above watched target: $${ca.targetPrice.toLocaleString()} (Now $${price.toFixed(2)})`,
-          type: 'CUSTOM',
-          severity: 'ALERT',
-          timestamp: Date.now(),
-        });
-      } else if (ca.condition === 'BELOW' && price <= ca.targetPrice) {
-        newAlerts.push({
-          id: `cust-${ca.id}`,
-          title: 'Custom Price Alert Triggered',
-          message: `BTC dropped below watched target: $${ca.targetPrice.toLocaleString()} (Now $${price.toFixed(2)})`,
-          type: 'CUSTOM',
-          severity: 'ALERT',
-          timestamp: Date.now(),
-        });
-      }
-    });
-
-    if (newAlerts.length > 0) {
-      setAlerts((prev) => {
-        // Prevent duplicate alerts within 60s
-        const existingTitles = new Set(prev.map((a) => a.title));
-        const filteredNew = newAlerts.filter((a) => !existingTitles.has(a.title));
-        return [...filteredNew, ...prev.slice(0, 10)];
-      });
-    }
-  };
+  }, [candles, currentPrice, activeSymbol, pricePrecision, evaluateMarketAlerts, historyFilter]);
 
   // 5. Fetch Gemini AI Synthesis
   const fetchGeminiAnalysis = useCallback(async () => {
@@ -422,6 +515,7 @@ export default function App() {
 
     try {
       const payload = {
+        symbol: activeSymbol,
         currentPrice,
         priceChangePercent: ticker?.priceChangePercent || 0,
         high24h: ticker?.highPrice || currentPrice,
@@ -458,9 +552,9 @@ export default function App() {
     } finally {
       setIsAiLoading(false);
     }
-  }, [currentPrice, ticker, indicators, multiTfSignals, predictions, activeTimeframe]);
+  }, [activeSymbol, currentPrice, ticker, indicators, multiTfSignals, predictions, activeTimeframe]);
 
-  // Initial AI call once market data stabilizes
+  // Initial AI call once market data stabilizes for a symbol
   useEffect(() => {
     if (currentPrice > 0 && indicators && !isInitialFetchDone.current) {
       isInitialFetchDone.current = true;
@@ -468,7 +562,6 @@ export default function App() {
     }
   }, [currentPrice, indicators, fetchGeminiAnalysis]);
 
-  // Handlers for Custom Alerts
   const handleAddCustomAlert = (targetPrice: number, condition: 'ABOVE' | 'BELOW') => {
     setCustomAlerts((prev) => [...prev, { id: `custom-${Date.now()}`, targetPrice, condition }]);
   };
@@ -495,18 +588,29 @@ export default function App() {
   const activePrediction = predictions[activePredictionTf];
 
   // Unconditional Rules-of-Hooks stable signal evaluation across ALL horizons (1h, 2h, 5h, 10h, 24h)
-  // Uses strictly closed historical chart candles + periodic futures snapshot so Entry / TP / SL stay stable
   const allHorizonSignals = useMemo(
-    () => analyzeAllHorizons(horizonCandlesMap, multiTfSignals, closedChartSnapshot, futuresMetrics),
-    [horizonCandlesMap, multiTfSignals, closedChartSnapshot, futuresMetrics]
+    () =>
+      analyzeAllHorizons(
+        horizonCandlesMap,
+        multiTfSignals,
+        closedChartSnapshot,
+        futuresMetrics,
+        activeSymbol,
+        pricePrecision
+      ),
+    [horizonCandlesMap, multiTfSignals, closedChartSnapshot, futuresMetrics, activeSymbol, pricePrecision]
   );
 
   const signalSetup = allHorizonSignals[activeHorizon];
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-[#06090e] text-slate-900 dark:text-slate-100 transition-colors duration-200">
-      {/* Top Header */}
+      {/* Top Header with Searchable USD-M Futures Coin Dropdown */}
       <Header
+        activeSymbol={activeSymbol}
+        futuresSymbols={futuresSymbols}
+        onSelectSymbol={handleSelectSymbol}
+        pricePrecision={pricePrecision}
         ticker={ticker}
         currentPrice={currentPrice}
         prevPrice={prevPrice}
@@ -515,11 +619,12 @@ export default function App() {
         isDarkMode={isDarkMode}
         onToggleTheme={() => setIsDarkMode(!isDarkMode)}
         onManualRefresh={() => {
-          loadHistoricalData(activeTimeframe);
+          const gen = marketLoadGenRef.current;
+          loadHistoricalData(activeTimeframe, activeSymbol, gen);
           if (binanceServiceRef.current) {
-            loadRealMultiTimeframeSignals(binanceServiceRef.current);
-            loadHorizonChartData(binanceServiceRef.current);
-            loadFuturesTelemetry(binanceServiceRef.current);
+            loadRealMultiTimeframeSignals(binanceServiceRef.current, activeSymbol, gen);
+            loadHorizonChartData(binanceServiceRef.current, activeSymbol, gen);
+            loadFuturesTelemetry(binanceServiceRef.current, activeSymbol, gen);
           }
           fetchGeminiAnalysis();
         }}
@@ -556,8 +661,8 @@ export default function App() {
 
           <p className="text-xs text-slate-500 dark:text-slate-400 font-mono tabular-nums">
             {viewMode === 'SIMPLE'
-              ? `Stable ${HORIZON_CONFIG[activeHorizon].label} setup locked on closed ${HORIZON_CONFIG[activeHorizon].chartTf} chart (${signalSetup?.totalCriteria ?? 16} indicators)`
-              : 'Full Quantitative Terminal · Multi-Horizon Forecast, Order Book & AI Synthesis'}
+              ? `${activeSymbol} · Stable ${HORIZON_CONFIG[activeHorizon].label} setup locked on closed ${HORIZON_CONFIG[activeHorizon].chartTf} chart (${signalSetup?.totalCriteria ?? 20} criteria)`
+              : `${activeSymbol} · Full Quantitative Futures Terminal · Order Book & AI Synthesis`}
           </p>
         </div>
       </div>
@@ -566,6 +671,9 @@ export default function App() {
       <main className="max-w-[1720px] mx-auto p-3 sm:p-4 md:p-5 space-y-5">
         {viewMode === 'SIMPLE' ? (
           <SimpleSignalView
+            symbol={activeSymbol}
+            baseAsset={baseAsset}
+            pricePrecision={pricePrecision}
             activeHorizon={activeHorizon}
             onSelectHorizon={handleSelectHorizon}
             allHorizonSignals={allHorizonSignals}
@@ -588,6 +696,7 @@ export default function App() {
                 activeTimeframe={activePredictionTf}
                 onSelectTimeframe={(tf) => setActivePredictionTf(tf)}
                 currentPrice={currentPrice}
+                pricePrecision={pricePrecision}
               />
             </section>
 
@@ -603,6 +712,8 @@ export default function App() {
                   activePrediction={activePrediction}
                   signalSetup={signalSetup}
                   isDarkMode={isDarkMode}
+                  symbol={activeSymbol}
+                  pricePrecision={pricePrecision}
                 />
 
                 {/* Multi-Timeframe Matrix (1m to 1d) */}
@@ -616,6 +727,8 @@ export default function App() {
                     orderBook={orderBook}
                     trades={trades}
                     currentPrice={currentPrice}
+                    symbol={activeSymbol}
+                    pricePrecision={pricePrecision}
                   />
                 </div>
 
@@ -640,6 +753,8 @@ export default function App() {
                 activeTimeframe={activePredictionTf}
                 onSelectTimeframe={(tf) => setActivePredictionTf(tf)}
                 candles={candles}
+                symbol={activeSymbol}
+                pricePrecision={pricePrecision}
               />
             </section>
 
@@ -656,7 +771,12 @@ export default function App() {
 
             {/* Section 5: Quantitative Technical Indicator Table */}
             <section>
-              <IndicatorsTable indicators={indicators} currentPrice={currentPrice} />
+              <IndicatorsTable
+                indicators={indicators}
+                currentPrice={currentPrice}
+                symbol={activeSymbol}
+                pricePrecision={pricePrecision}
+              />
             </section>
 
             {/* Section 6: Historical Prediction Performance & Out-of-Sample Evaluation */}
@@ -685,7 +805,7 @@ export default function App() {
             It is NOT financial advice or a guaranteed trading signal generator. Never trade with capital you cannot afford to lose.
           </p>
           <div className="text-[10px] text-slate-500 dark:text-slate-600">
-            Binance Public WebSocket & REST API • TradingView Lightweight Charts • Real-Time Engine
+            Binance USD-M Futures WebSocket &amp; REST API • TradingView Lightweight Charts • Real-Time Engine
           </div>
         </footer>
       </main>

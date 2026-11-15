@@ -13,6 +13,12 @@ import {
 import { Candle, ChartTimeframe, TechnicalIndicators, PredictionResult } from '../types/crypto';
 import { TradeSignalSetup } from '../services/signalAnalyzer';
 import {
+  formatCoinPrice,
+  formatCompactCoinPrice,
+  getBaseAssetFromSymbol,
+  getPriceDecimals,
+} from '../utils/formatters';
+import {
   Sliders,
   Activity,
   Target,
@@ -27,6 +33,8 @@ interface TradingChartProps {
   activePrediction: PredictionResult | null;
   signalSetup?: TradeSignalSetup | null;
   isDarkMode?: boolean;
+  symbol?: string;
+  pricePrecision?: number;
 }
 
 const TIMEFRAMES: ChartTimeframe[] = ['1m', '3m', '5m', '15m', '30m', '1h', '4h', '1d', '1w'];
@@ -39,6 +47,8 @@ export const TradingChart: React.FC<TradingChartProps> = ({
   activePrediction,
   signalSetup,
   isDarkMode = true,
+  symbol = 'BTCUSDT',
+  pricePrecision,
 }) => {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -225,9 +235,42 @@ export const TradingChart: React.FC<TradingChartProps> = ({
     };
   }, [isDarkMode]);
 
+  const latestCandle = candles[candles.length - 1];
+  const refPrice = latestCandle?.close || signalSetup?.entryPrice || 100;
+  const effectiveDecimals = getPriceDecimals(refPrice, pricePrecision);
+  const baseAsset = getBaseAssetFromSymbol(symbol);
+
+  // Sync dynamic price precision on chart axis & indicator overlays when symbol or candles change
+  useEffect(() => {
+    const minMove = Number(Math.pow(10, -effectiveDecimals).toFixed(effectiveDecimals));
+    const priceFormat = {
+      type: 'price' as const,
+      precision: effectiveDecimals,
+      minMove,
+    };
+    candleSeriesRef.current?.applyOptions({ priceFormat });
+    ema20SeriesRef.current?.applyOptions({ priceFormat });
+    ema50SeriesRef.current?.applyOptions({ priceFormat });
+    ema200SeriesRef.current?.applyOptions({ priceFormat });
+    bbUpperSeriesRef.current?.applyOptions({ priceFormat });
+    bbLowerSeriesRef.current?.applyOptions({ priceFormat });
+    vwapSeriesRef.current?.applyOptions({ priceFormat });
+  }, [effectiveDecimals, symbol]);
+
   // 2. Feed Candlestick & Volume Data
   useEffect(() => {
-    if (!candleSeriesRef.current || !volumeSeriesRef.current || candles.length === 0) return;
+    if (!candleSeriesRef.current || !volumeSeriesRef.current) return;
+    if (candles.length === 0) {
+      candleSeriesRef.current.setData([]);
+      volumeSeriesRef.current.setData([]);
+      ema20SeriesRef.current?.setData([]);
+      ema50SeriesRef.current?.setData([]);
+      ema200SeriesRef.current?.setData([]);
+      bbUpperSeriesRef.current?.setData([]);
+      bbLowerSeriesRef.current?.setData([]);
+      vwapSeriesRef.current?.setData([]);
+      return;
+    }
 
     // Filter and sort unique candles by timestamp
     const sorted = [...candles].sort((a, b) => a.time - b.time);
@@ -386,7 +429,7 @@ export const TradingChart: React.FC<TradingChartProps> = ({
         lineWidth: 1,
         lineStyle: LineStyle.Dotted,
         axisLabelVisible: true,
-        title: `Prev Res $${rLevel.toFixed(0)}`,
+        title: `Prev Res $${formatCompactCoinPrice(rLevel, refPrice, effectiveDecimals)}`,
       });
       priceLinesRef.current.push(rLine);
 
@@ -396,7 +439,7 @@ export const TradingChart: React.FC<TradingChartProps> = ({
         lineWidth: 1,
         lineStyle: LineStyle.Dotted,
         axisLabelVisible: true,
-        title: `Prev Supp $${sLevel.toFixed(0)}`,
+        title: `Prev Supp $${formatCompactCoinPrice(sLevel, refPrice, effectiveDecimals)}`,
       });
       priceLinesRef.current.push(sLine);
     }
@@ -409,7 +452,7 @@ export const TradingChart: React.FC<TradingChartProps> = ({
         lineWidth: 2,
         lineStyle: LineStyle.Solid,
         axisLabelVisible: true,
-        title: `Entry (${signalSetup.action}): $${signalSetup.entryPrice.toFixed(1)}`,
+        title: `Entry (${signalSetup.action}): $${formatCoinPrice(signalSetup.entryPrice, refPrice, effectiveDecimals)}`,
       });
       priceLinesRef.current.push(entryLine);
 
@@ -419,7 +462,7 @@ export const TradingChart: React.FC<TradingChartProps> = ({
         lineWidth: 2,
         lineStyle: LineStyle.Dashed,
         axisLabelVisible: true,
-        title: `TP1: $${signalSetup.takeProfit1.toFixed(1)}`,
+        title: `TP1: $${formatCoinPrice(signalSetup.takeProfit1, refPrice, effectiveDecimals)}`,
       });
       priceLinesRef.current.push(tp1Line);
 
@@ -429,7 +472,7 @@ export const TradingChart: React.FC<TradingChartProps> = ({
         lineWidth: 1,
         lineStyle: LineStyle.Dashed,
         axisLabelVisible: true,
-        title: `TP2: $${signalSetup.takeProfit2.toFixed(1)}`,
+        title: `TP2: $${formatCoinPrice(signalSetup.takeProfit2, refPrice, effectiveDecimals)}`,
       });
       priceLinesRef.current.push(tp2Line);
 
@@ -439,7 +482,7 @@ export const TradingChart: React.FC<TradingChartProps> = ({
         lineWidth: 2,
         lineStyle: LineStyle.Dashed,
         axisLabelVisible: true,
-        title: `Stop Loss: $${signalSetup.stopLoss.toFixed(1)}`,
+        title: `Stop Loss: $${formatCoinPrice(signalSetup.stopLoss, refPrice, effectiveDecimals)}`,
       });
       priceLinesRef.current.push(slLine);
     }
@@ -455,13 +498,12 @@ export const TradingChart: React.FC<TradingChartProps> = ({
         lineWidth: 2,
         lineStyle: LineStyle.Solid,
         axisLabelVisible: true,
-        title: `Forecast ${activePrediction.timeframe}: $${activePrediction.predictedPrice}`,
+        title: `Forecast ${activePrediction.timeframe}: $${formatCoinPrice(activePrediction.predictedPrice, refPrice, effectiveDecimals)}`,
       });
       priceLinesRef.current.push(targetLine);
     }
-  }, [indicators, activePrediction, signalSetup, showSignalLevels, showPredictionOverlay, showSRLevels]);
+  }, [indicators, activePrediction, signalSetup, showSignalLevels, showPredictionOverlay, showSRLevels, effectiveDecimals, refPrice]);
 
-  const latestCandle = candles[candles.length - 1];
   const activeCandle = hoveredCandle || latestCandle;
 
   return (
@@ -595,17 +637,17 @@ export const TradingChart: React.FC<TradingChartProps> = ({
 
       {/* Floating Price & Candle Legend */}
       <div className="px-4 py-2 border-b border-slate-200 dark:border-slate-800/80 bg-white dark:bg-slate-950/40 flex flex-wrap items-center gap-4 text-xs font-mono tabular-nums">
-        <span className="text-slate-700 dark:text-slate-300 font-bold">BTC/USDT</span>
+        <span className="text-slate-700 dark:text-slate-300 font-bold">{baseAsset}/USDT PERP</span>
         {activeCandle && typeof activeCandle.close === 'number' && (
           <>
             <span className="text-slate-500 dark:text-slate-400">
-              O <span className="text-slate-900 dark:text-slate-200">${(activeCandle.open ?? activeCandle.close).toFixed(2)}</span>
+              O <span className="text-slate-900 dark:text-slate-200">${formatCoinPrice(activeCandle.open ?? activeCandle.close, refPrice, effectiveDecimals)}</span>
             </span>
             <span className="text-slate-500 dark:text-slate-400">
-              H <span className="text-slate-900 dark:text-slate-200">${(activeCandle.high ?? activeCandle.close).toFixed(2)}</span>
+              H <span className="text-slate-900 dark:text-slate-200">${formatCoinPrice(activeCandle.high ?? activeCandle.close, refPrice, effectiveDecimals)}</span>
             </span>
             <span className="text-slate-500 dark:text-slate-400">
-              L <span className="text-slate-900 dark:text-slate-200">${(activeCandle.low ?? activeCandle.close).toFixed(2)}</span>
+              L <span className="text-slate-900 dark:text-slate-200">${formatCoinPrice(activeCandle.low ?? activeCandle.close, refPrice, effectiveDecimals)}</span>
             </span>
             <span className="text-slate-500 dark:text-slate-400">
               C{' '}
@@ -616,11 +658,11 @@ export const TradingChart: React.FC<TradingChartProps> = ({
                     : 'text-rose-600 dark:text-rose-400'
                 }`}
               >
-                ${activeCandle.close.toFixed(2)}
+                ${formatCoinPrice(activeCandle.close, refPrice, effectiveDecimals)}
               </span>
             </span>
             <span className="text-slate-500 dark:text-slate-400">
-              Vol <span className="text-slate-900 dark:text-slate-200">{(activeCandle.volume ?? 0).toFixed(2)}</span>
+              Vol <span className="text-slate-900 dark:text-slate-200">{(activeCandle.volume ?? 0).toLocaleString('en-US', { maximumFractionDigits: 2 })}</span>
             </span>
           </>
         )}
@@ -634,17 +676,23 @@ export const TradingChart: React.FC<TradingChartProps> = ({
         <div className="flex flex-wrap items-center gap-3">
           {showSignalLevels && signalSetup ? (
             <>
-              <span className="text-amber-600 dark:text-amber-400">Entry ${signalSetup.entryPrice.toFixed(0)}</span>
+              <span className="text-amber-600 dark:text-amber-400">
+                Entry ${formatCoinPrice(signalSetup.entryPrice, refPrice, effectiveDecimals)}
+              </span>
               <span aria-hidden="true">·</span>
-              <span className="text-emerald-600 dark:text-emerald-400">TP1 ${signalSetup.takeProfit1.toFixed(0)}</span>
+              <span className="text-emerald-600 dark:text-emerald-400">
+                TP1 ${formatCoinPrice(signalSetup.takeProfit1, refPrice, effectiveDecimals)}
+              </span>
               <span aria-hidden="true">·</span>
-              <span className="text-rose-600 dark:text-rose-400">SL ${signalSetup.stopLoss.toFixed(0)}</span>
+              <span className="text-rose-600 dark:text-rose-400">
+                SL ${formatCoinPrice(signalSetup.stopLoss, refPrice, effectiveDecimals)}
+              </span>
             </>
           ) : (
             <span>Scroll to zoom · Drag to pan</span>
           )}
         </div>
-        <span>Binance OHLCV + Volume</span>
+        <span>Binance Futures OHLCV + Volume</span>
       </div>
     </div>
   );

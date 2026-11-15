@@ -14,6 +14,12 @@ import {
 } from '../services/signalAnalyzer';
 import { TradingChart } from './TradingChart';
 import {
+  formatCoinPrice,
+  formatCompactCoinPrice,
+  getPriceDecimals,
+  roundToPricePrecision,
+} from '../utils/formatters';
+import {
   TrendingUp,
   TrendingDown,
   Minus,
@@ -28,6 +34,7 @@ import {
 } from 'lucide-react';
 
 interface LockedTradePlan {
+  symbol: string;
   horizon: TradeHorizon;
   action: 'BUY' | 'SELL' | 'WAIT';
   entryPrice: number;
@@ -42,9 +49,12 @@ interface LockedTradePlan {
   chartTf: ChartTimeframe;
 }
 
-const LOCK_STORAGE_KEY = 'btc_locked_trade_plan_v2';
+const LOCK_STORAGE_KEY = 'crypto_locked_trade_plan_v3';
 
 interface SimpleSignalViewProps {
+  symbol: string;
+  baseAsset: string;
+  pricePrecision?: number;
   activeHorizon: TradeHorizon;
   onSelectHorizon: (h: TradeHorizon) => void;
   allHorizonSignals: Record<TradeHorizon, TradeSignalSetup | null>;
@@ -74,6 +84,9 @@ function formatRemaining(ms: number): string {
 }
 
 export const SimpleSignalView: React.FC<SimpleSignalViewProps> = ({
+  symbol,
+  baseAsset,
+  pricePrecision,
   activeHorizon,
   onSelectHorizon,
   allHorizonSignals,
@@ -112,7 +125,7 @@ export const SimpleSignalView: React.FC<SimpleSignalViewProps> = ({
     return (
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-10 text-center">
         <p className="text-sm font-medium text-slate-600 dark:text-slate-300">
-          Loading previous Binance closed chart candles & futures metrics across 1h, 2h, 5h, 10h, and 24h ranges...
+          Loading {symbol} closed chart candles &amp; USD-M Futures metrics across 1h, 2h, 5h, 10h, and 24h ranges...
         </p>
       </div>
     );
@@ -142,21 +155,27 @@ export const SimpleSignalView: React.FC<SimpleSignalViewProps> = ({
   const neutPct = (signal.neutralCount / signal.totalCriteria) * 100;
   const bearPct = (signal.bearishCount / signal.totalCriteria) * 100;
 
+  const decimals = getPriceDecimals(signal.entryPrice, pricePrecision ?? signal.pricePrecision);
+  const fPrice = (v: number) => formatCoinPrice(v, signal.entryPrice, decimals);
+  const fCompact = (v: number) => formatCompactCoinPrice(v, signal.entryPrice, decimals);
+  const rPrice = (v: number) => roundToPricePrecision(v, signal.entryPrice, decimals);
+
   // Position & Futures Leverage Math
   const dollarRisk = (accountEquity * riskPct) / 100;
   const slDistance = Math.abs(signal.entryPrice - signal.stopLoss);
-  const positionBtc = slDistance > 0 ? dollarRisk / slDistance : 0;
-  const notionalUsd = positionBtc * signal.entryPrice;
+  const positionQty = slDistance > 0 ? dollarRisk / slDistance : 0;
+  const notionalUsd = positionQty * signal.entryPrice;
   const requiredMargin = leverage > 0 ? notionalUsd / leverage : notionalUsd;
   const marginUtilizationPct = accountEquity > 0 ? (requiredMargin / accountEquity) * 100 : 0;
-  const potentialTp1Profit = positionBtc * Math.abs(signal.takeProfit1 - signal.entryPrice);
+  const potentialTp1Profit = positionQty * Math.abs(signal.takeProfit1 - signal.entryPrice);
+  const qtyDecimals = signal.entryPrice >= 1000 ? 4 : signal.entryPrice >= 10 ? 2 : 0;
 
-  // Isolated Maintenance Margin ~ 0.5% for BTCUSDT Perpetual
+  // Isolated Maintenance Margin ~ 0.5% for USD-M Perpetual
   const mmr = 0.005;
   const estLiquidationPrice =
     signal.action === 'SELL'
-      ? parseFloat((signal.entryPrice * (1 + 1 / Math.max(1, leverage) - mmr)).toFixed(2))
-      : parseFloat((signal.entryPrice * Math.max(0.05, 1 - 1 / Math.max(1, leverage) + mmr)).toFixed(2));
+      ? rPrice(signal.entryPrice * (1 + 1 / Math.max(1, leverage) - mmr))
+      : rPrice(signal.entryPrice * Math.max(0.05, 1 - 1 / Math.max(1, leverage) + mmr));
 
   const roeTp1Pct = Math.abs(signal.tp1Pct) * leverage;
   const roeTp2Pct = Math.abs(signal.tp2Pct) * leverage;
@@ -179,23 +198,24 @@ export const SimpleSignalView: React.FC<SimpleSignalViewProps> = ({
     currentPrice <= signal.entryZone[1];
 
   const handleLockTradeNow = () => {
-    const entryAnchor = currentPrice > 0 ? parseFloat(currentPrice.toFixed(2)) : signal.entryPrice;
+    const entryAnchor = currentPrice > 0 ? rPrice(currentPrice) : signal.entryPrice;
     const slDelta = signal.stopLoss - signal.entryPrice;
     const tp1Delta = signal.takeProfit1 - signal.entryPrice;
     const tp2Delta = signal.takeProfit2 - signal.entryPrice;
     const lockedLiq =
       signal.action === 'SELL'
-        ? parseFloat((entryAnchor * (1 + 1 / Math.max(1, leverage) - mmr)).toFixed(2))
-        : parseFloat((entryAnchor * Math.max(0.05, 1 - 1 / Math.max(1, leverage) + mmr)).toFixed(2));
+        ? rPrice(entryAnchor * (1 + 1 / Math.max(1, leverage) - mmr))
+        : rPrice(entryAnchor * Math.max(0.05, 1 - 1 / Math.max(1, leverage) + mmr));
 
     const now = Date.now();
     const plan: LockedTradePlan = {
+      symbol,
       horizon: signal.horizon,
       action: signal.action,
       entryPrice: entryAnchor,
-      stopLoss: parseFloat((entryAnchor + slDelta).toFixed(2)),
-      takeProfit1: parseFloat((entryAnchor + tp1Delta).toFixed(2)),
-      takeProfit2: parseFloat((entryAnchor + tp2Delta).toFixed(2)),
+      stopLoss: rPrice(entryAnchor + slDelta),
+      takeProfit1: rPrice(entryAnchor + tp1Delta),
+      takeProfit2: rPrice(entryAnchor + tp2Delta),
       leverage,
       marginMode,
       liquidationPrice: lockedLiq,
@@ -217,13 +237,13 @@ export const SimpleSignalView: React.FC<SimpleSignalViewProps> = ({
   };
 
   const handleCopyLevels = () => {
-    const text = `BTCUSDT Perpetual Futures · ${signal.action} (${signal.horizonLabel} · ${signal.timeframe} Closed Chart)
+    const text = `${symbol} Perpetual Futures · ${signal.action} (${signal.horizonLabel} · ${signal.timeframe} Closed Chart)
 Leverage: ${leverage}x ${marginMode} (Recommended Safe: ${signal.recommendedLeverage}x | Max Safe: ${signal.maxSafeLeverage}x)
-Entry Price: $${signal.entryPrice.toFixed(2)} (Zone: $${signal.entryZone[0].toFixed(2)} - $${signal.entryZone[1].toFixed(2)})
-Stop Loss: $${signal.stopLoss.toFixed(2)} (${signal.slPct}% | ${roeSlPct.toFixed(1)}% ROE)
-Take Profit 1: $${signal.takeProfit1.toFixed(2)} (+${Math.abs(signal.tp1Pct)}% | +${roeTp1Pct.toFixed(1)}% ROE)
-Take Profit 2: $${signal.takeProfit2.toFixed(2)} (+${Math.abs(signal.tp2Pct)}% | +${roeTp2Pct.toFixed(1)}% ROE)
-Est. Liquidation Price: $${estLiquidationPrice.toFixed(2)}
+Entry Price: $${fPrice(signal.entryPrice)} (Zone: $${fPrice(signal.entryZone[0])} - $${fPrice(signal.entryZone[1])})
+Stop Loss: $${fPrice(signal.stopLoss)} (${signal.slPct}% | ${roeSlPct.toFixed(1)}% ROE)
+Take Profit 1: $${fPrice(signal.takeProfit1)} (+${Math.abs(signal.tp1Pct)}% | +${roeTp1Pct.toFixed(1)}% ROE)
+Take Profit 2: $${fPrice(signal.takeProfit2)} (+${Math.abs(signal.tp2Pct)}% | +${roeTp2Pct.toFixed(1)}% ROE)
+Est. Liquidation Price: $${fPrice(estLiquidationPrice)}
 Hold Duration: ${signal.horizonLabel} (Target End: ${targetExitTime})
 Risk/Reward: 1 : ${signal.riskRewardRatio}
 Criteria: ${signal.bullishCount} Bullish / ${signal.bearishCount} Bearish / ${signal.neutralCount} Neutral`;
@@ -232,13 +252,14 @@ Criteria: ${signal.bullishCount} Bullish / ${signal.bearishCount} Bearish / ${si
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // Evaluate Locked Trade live leveraged ROE if active
+  // Evaluate Locked Trade live leveraged ROE if viewing the locked symbol
   let lockedSpotPnlPct = 0;
   let lockedRoePct = 0;
   let lockedStatusText = 'Active — Monitoring';
   let lockedStatusColor = 'text-amber-600 dark:text-amber-400';
+  const isLockedSameSymbol = lockedPlan ? (lockedPlan.symbol || 'BTCUSDT') === symbol : false;
 
-  if (lockedPlan && currentPrice > 0) {
+  if (lockedPlan && isLockedSameSymbol && currentPrice > 0) {
     const dir = lockedPlan.action === 'SELL' ? -1 : 1;
     lockedSpotPnlPct = (((currentPrice - lockedPlan.entryPrice) / lockedPlan.entryPrice) * 100) * dir;
     lockedRoePct = lockedSpotPnlPct * (lockedPlan.leverage || 1);
@@ -265,6 +286,8 @@ Criteria: ${signal.bullishCount} Bullish / ${signal.bearishCount} Bearish / ${si
         lockedStatusColor = 'text-rose-600 dark:text-rose-400';
       }
     }
+  } else if (lockedPlan && !isLockedSameSymbol) {
+    lockedStatusText = `Viewing ${symbol} · Select ${lockedPlan.symbol} for live P&L`;
   }
 
   const fm = signal.futuresMetrics;
@@ -313,6 +336,8 @@ Criteria: ${signal.bullishCount} Bullish / ${signal.bearishCount} Bearish / ${si
             <div className="space-y-1">
               <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400 font-mono tabular-nums">
                 <Lock className="w-3.5 h-3.5 text-amber-500" />
+                <span className="font-bold text-slate-800 dark:text-slate-200">{lockedPlan.symbol || 'BTCUSDT'}</span>
+                <span aria-hidden="true">·</span>
                 <span>
                   Locked {HORIZON_CONFIG[lockedPlan.horizon].label} ({lockedPlan.leverage || 10}x {lockedPlan.marginMode || 'Isolated'})
                 </span>
@@ -328,20 +353,20 @@ Criteria: ${signal.bullishCount} Bullish / ${signal.bearishCount} Bearish / ${si
 
               <div className="flex flex-wrap items-center gap-4 font-mono tabular-nums text-sm">
                 <span className="font-bold text-slate-900 dark:text-white">
-                  {lockedPlan.action} @ ${lockedPlan.entryPrice.toLocaleString()}
+                  {lockedPlan.action} @ ${formatCoinPrice(lockedPlan.entryPrice, lockedPlan.entryPrice)}
                 </span>
                 <span className="text-rose-600 dark:text-rose-400">
-                  SL ${lockedPlan.stopLoss.toLocaleString()}
+                  SL ${formatCoinPrice(lockedPlan.stopLoss, lockedPlan.entryPrice)}
                 </span>
                 <span className="text-emerald-600 dark:text-emerald-400">
-                  TP1 ${lockedPlan.takeProfit1.toLocaleString()}
+                  TP1 ${formatCoinPrice(lockedPlan.takeProfit1, lockedPlan.entryPrice)}
                 </span>
                 <span className="text-emerald-600 dark:text-emerald-400">
-                  TP2 ${lockedPlan.takeProfit2.toLocaleString()}
+                  TP2 ${formatCoinPrice(lockedPlan.takeProfit2, lockedPlan.entryPrice)}
                 </span>
                 {lockedPlan.liquidationPrice > 0 && (
                   <span className="text-slate-500 dark:text-slate-400 text-xs">
-                    Liq ~${lockedPlan.liquidationPrice.toLocaleString()}
+                    Liq ~${formatCoinPrice(lockedPlan.liquidationPrice, lockedPlan.entryPrice)}
                   </span>
                 )}
               </div>
@@ -352,15 +377,17 @@ Criteria: ${signal.bullishCount} Bullish / ${signal.bearishCount} Bearish / ${si
                 <span className={`text-xs font-bold block ${lockedStatusColor}`}>
                   {lockedStatusText}
                 </span>
-                <span
-                  className={`text-sm font-bold ${
-                    lockedRoePct >= 0
-                      ? 'text-emerald-600 dark:text-emerald-400'
-                      : 'text-rose-600 dark:text-rose-400'
-                  }`}
-                >
-                  {lockedRoePct >= 0 ? '+' : ''}{lockedRoePct.toFixed(2)}% ROE ({lockedSpotPnlPct >= 0 ? '+' : ''}{lockedSpotPnlPct.toFixed(2)}%)
-                </span>
+                {isLockedSameSymbol && (
+                  <span
+                    className={`text-sm font-bold ${
+                      lockedRoePct >= 0
+                        ? 'text-emerald-600 dark:text-emerald-400'
+                        : 'text-rose-600 dark:text-rose-400'
+                    }`}
+                  >
+                    {lockedRoePct >= 0 ? '+' : ''}{lockedRoePct.toFixed(2)}% ROE ({lockedSpotPnlPct >= 0 ? '+' : ''}{lockedSpotPnlPct.toFixed(2)}%)
+                  </span>
+                )}
               </div>
 
               <button
@@ -441,12 +468,12 @@ Criteria: ${signal.bullishCount} Bullish / ${signal.bearishCount} Bearish / ${si
               Stable Entry Price ({signal.timeframe} close)
             </span>
             <span className="text-2xl font-bold font-mono tabular-nums text-slate-900 dark:text-slate-100 mt-1 block">
-              ${signal.entryPrice.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              ${fPrice(signal.entryPrice)}
             </span>
             <span className="text-xs font-mono tabular-nums text-slate-500 dark:text-slate-400 mt-1 block">
               {liveInZone
-                ? `Live price inside Entry Zone ($${signal.entryZone[0].toFixed(0)}–$${signal.entryZone[1].toFixed(0)})`
-                : `Live ${liveDiffFromEntry >= 0 ? '+' : ''}$${liveDiffFromEntry.toFixed(0)} vs Entry`}
+                ? `Live price inside Entry Zone ($${fCompact(signal.entryZone[0])}–$${fCompact(signal.entryZone[1])})`
+                : `Live ${liveDiffFromEntry >= 0 ? '+' : ''}$${fCompact(Math.abs(liveDiffFromEntry))} vs Entry`}
             </span>
           </div>
 
@@ -455,11 +482,11 @@ Criteria: ${signal.bullishCount} Bullish / ${signal.bearishCount} Bearish / ${si
               Take Profit 1 & 2 ({leverage}x ROE)
             </span>
             <span className="text-2xl font-bold font-mono tabular-nums text-emerald-600 dark:text-emerald-400 mt-1 block">
-              ${signal.takeProfit1.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              ${fPrice(signal.takeProfit1)}
             </span>
             <span className="text-xs font-mono tabular-nums text-emerald-600/85 dark:text-emerald-400/85 mt-1 inline-flex items-center gap-1">
               <ArrowUpRight className="w-3.5 h-3.5" />
-              +{roeTp1Pct.toFixed(1)}% ROE · TP2 ${signal.takeProfit2.toFixed(0)} (+{roeTp2Pct.toFixed(1)}% ROE)
+              +{roeTp1Pct.toFixed(1)}% ROE · TP2 ${fCompact(signal.takeProfit2)} (+{roeTp2Pct.toFixed(1)}% ROE)
             </span>
           </div>
 
@@ -468,7 +495,7 @@ Criteria: ${signal.bullishCount} Bullish / ${signal.bearishCount} Bearish / ${si
               Stop Loss ({leverage}x Risk)
             </span>
             <span className="text-2xl font-bold font-mono tabular-nums text-rose-600 dark:text-rose-400 mt-1 block">
-              ${signal.stopLoss.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              ${fPrice(signal.stopLoss)}
             </span>
             <span className="text-xs font-mono tabular-nums text-rose-600/85 dark:text-rose-400/85 mt-1 inline-flex items-center gap-1">
               <ArrowDownRight className="w-3.5 h-3.5" />
@@ -633,10 +660,10 @@ Criteria: ${signal.bullishCount} Bullish / ${signal.bearishCount} Bearish / ${si
                     : 'text-rose-600 dark:text-rose-400'
                 }`}
               >
-                {marginMode === 'Isolated' ? `$${estLiquidationPrice.toLocaleString()}` : 'Cross Wallet'}
+                {marginMode === 'Isolated' ? `$${fPrice(estLiquidationPrice)}` : 'Cross Wallet'}
               </span>
               <span className="text-[11px] text-slate-500 dark:text-slate-400">
-                SL ${signal.stopLoss.toLocaleString()}
+                SL ${fPrice(signal.stopLoss)}
               </span>
             </div>
 
@@ -660,7 +687,7 @@ Criteria: ${signal.bullishCount} Bullish / ${signal.bearishCount} Bearish / ${si
                 ${notionalUsd.toLocaleString('en-US', { maximumFractionDigits: 0 })}
               </span>
               <span className="text-[11px] text-slate-500 dark:text-slate-400">
-                {positionBtc.toFixed(4)} BTC contract
+                {positionQty.toFixed(qtyDecimals)} {baseAsset} contract
               </span>
             </div>
           </div>
@@ -673,7 +700,7 @@ Criteria: ${signal.bullishCount} Bullish / ${signal.bearishCount} Bearish / ${si
               Futures Mark Price
             </span>
             <span className="font-bold text-slate-900 dark:text-slate-100 mt-0.5 block">
-              {fm ? `$${fm.markPrice.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : 'Loading...'}
+              {fm ? `$${fPrice(fm.markPrice)}` : 'Loading...'}
             </span>
           </div>
 
@@ -700,7 +727,7 @@ Criteria: ${signal.bullishCount} Bullish / ${signal.bearishCount} Bearish / ${si
             </span>
             <span className="font-bold text-slate-900 dark:text-slate-100 mt-0.5 block">
               {fm && fm.openInterestBtc > 0
-                ? `${fm.openInterestBtc.toLocaleString('en-US', { maximumFractionDigits: 0 })} BTC`
+                ? `${fm.openInterestBtc.toLocaleString('en-US', { maximumFractionDigits: 0 })} ${baseAsset}`
                 : '—'}
             </span>
           </div>
@@ -808,19 +835,19 @@ Criteria: ${signal.bullishCount} Bullish / ${signal.bearishCount} Bearish / ${si
                       <div className="flex justify-between">
                         <span className="text-slate-500 dark:text-slate-400">Entry</span>
                         <span className="font-semibold text-slate-900 dark:text-slate-100">
-                          ${item.entryPrice.toLocaleString()}
+                          ${fPrice(item.entryPrice)}
                         </span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-slate-500 dark:text-slate-400">TP1</span>
                         <span className="font-semibold text-emerald-600 dark:text-emerald-400">
-                          ${item.takeProfit1.toLocaleString()}
+                          ${fPrice(item.takeProfit1)}
                         </span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-slate-500 dark:text-slate-400">SL</span>
                         <span className="font-semibold text-rose-600 dark:text-rose-400">
-                          ${item.stopLoss.toLocaleString()}
+                          ${fPrice(item.stopLoss)}
                         </span>
                       </div>
                     </div>
@@ -850,6 +877,8 @@ Criteria: ${signal.bullishCount} Bullish / ${signal.bearishCount} Bearish / ${si
             activePrediction={activePrediction}
             signalSetup={signal}
             isDarkMode={isDarkMode}
+            symbol={symbol}
+            pricePrecision={decimals}
           />
         </div>
 
@@ -866,7 +895,7 @@ Criteria: ${signal.bullishCount} Bullish / ${signal.bearishCount} Bearish / ${si
                 </p>
               </div>
               <div className="text-xs font-mono tabular-nums text-slate-500 dark:text-slate-400">
-                S ${signal.swingSupport.toFixed(0)} · R ${signal.swingResistance.toFixed(0)}
+                S ${fCompact(signal.swingSupport)} · R ${fCompact(signal.swingResistance)}
               </div>
             </div>
 
@@ -939,7 +968,7 @@ Criteria: ${signal.bullishCount} Bullish / ${signal.bearishCount} Bearish / ${si
                 Futures Wallet Risk Calculator ({leverage}x)
               </span>
               <span className="text-xs text-slate-500 dark:text-slate-400 font-mono tabular-nums">
-                Stop Distance: ${slDistance.toFixed(0)} / BTC
+                Stop Distance: ${fPrice(slDistance)} / {baseAsset}
               </span>
             </div>
 
@@ -980,7 +1009,7 @@ Criteria: ${signal.bullishCount} Bullish / ${signal.bearishCount} Bearish / ${si
                   ${requiredMargin.toFixed(0)} margin
                 </div>
                 <div className="text-[11px] font-mono tabular-nums text-slate-500 dark:text-slate-400">
-                  {positionBtc.toFixed(4)} BTC
+                  {positionQty.toFixed(qtyDecimals)} {baseAsset}
                 </div>
               </div>
 

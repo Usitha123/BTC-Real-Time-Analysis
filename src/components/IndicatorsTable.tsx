@@ -1,25 +1,34 @@
 import React, { useState } from 'react';
-import { TechnicalIndicators, IndicatorInterpretation } from '../types/crypto';
+import { TechnicalIndicators } from '../types/crypto';
 import {
-  Activity,
+  formatCoinPrice,
+  formatCompactCoinPrice,
+  getBaseAssetFromSymbol,
+  getPriceDecimals,
+} from '../utils/formatters';
+import {
   TrendingUp,
   TrendingDown,
   Minus,
-  SlidersHorizontal,
-  BarChart2,
   Gauge,
-  Flame,
   Search,
 } from 'lucide-react';
 
 interface IndicatorsTableProps {
   indicators: TechnicalIndicators | null;
   currentPrice: number;
+  symbol?: string;
+  pricePrecision?: number;
 }
 
 type Category = 'ALL' | 'TREND' | 'MOMENTUM' | 'VOLATILITY' | 'VOLUME';
 
-export const IndicatorsTable: React.FC<IndicatorsTableProps> = ({ indicators, currentPrice }) => {
+export const IndicatorsTable: React.FC<IndicatorsTableProps> = ({
+  indicators,
+  currentPrice,
+  symbol = 'BTCUSDT',
+  pricePrecision,
+}) => {
   const [selectedCategory, setSelectedCategory] = useState<Category>('ALL');
   const [searchTerm, setSearchTerm] = useState('');
 
@@ -31,62 +40,68 @@ export const IndicatorsTable: React.FC<IndicatorsTableProps> = ({ indicators, cu
     );
   }
 
+  const baseAsset = getBaseAssetFromSymbol(symbol);
+  const decimals = getPriceDecimals(currentPrice, pricePrecision);
+  const fPrice = (v: number) => formatCoinPrice(v, currentPrice, decimals);
+  const fCompact = (v: number) => formatCompactCoinPrice(v, currentPrice, decimals);
+  const macdDecimals = Math.max(2, decimals);
+
   // Build row definitions
   const rows = [
     // Trend
     {
       category: 'TREND',
       name: 'EMA 9',
-      value: `$${indicators.ema9.toFixed(2)}`,
+      value: `$${fPrice(indicators.ema9)}`,
       signal: currentPrice > indicators.ema9 ? 'BULLISH' : 'BEARISH',
       detail: currentPrice > indicators.ema9 ? 'Price above fast momentum curve' : 'Price trailing fast momentum curve',
     },
     {
       category: 'TREND',
       name: 'EMA 20',
-      value: `$${indicators.ema20.toFixed(2)}`,
+      value: `$${fPrice(indicators.ema20)}`,
       signal: currentPrice > indicators.ema20 ? 'BULLISH' : 'BEARISH',
       detail: currentPrice > indicators.ema20 ? 'Short-term trend support maintained' : 'Short-term trend resistance overhead',
     },
     {
       category: 'TREND',
       name: 'EMA 50',
-      value: `$${indicators.ema50.toFixed(2)}`,
+      value: `$${fPrice(indicators.ema50)}`,
       signal: currentPrice > indicators.ema50 ? 'BULLISH' : 'BEARISH',
       detail: currentPrice > indicators.ema50 ? 'Intermediate bullish support holding' : 'Intermediate bearish pressure dominant',
     },
     {
       category: 'TREND',
       name: 'EMA 100',
-      value: `$${indicators.ema100.toFixed(2)}`,
+      value: `$${fPrice(indicators.ema100)}`,
       signal: currentPrice > indicators.ema100 ? 'BULLISH' : 'BEARISH',
       detail: currentPrice > indicators.ema100 ? 'Institutional cycle bias bullish' : 'Institutional cycle bias bearish',
     },
     {
       category: 'TREND',
       name: 'EMA 200',
-      value: `$${indicators.ema200.toFixed(2)}`,
+      value: `$${fPrice(indicators.ema200)}`,
       signal: currentPrice > indicators.ema200 ? 'BULLISH' : 'BEARISH',
       detail: currentPrice > indicators.ema200 ? 'Macro bull market regime baseline' : 'Macro bear market regime baseline',
     },
     {
       category: 'TREND',
       name: 'SMA 20',
-      value: `$${indicators.sma20.toFixed(2)}`,
+      value: `$${fPrice(indicators.sma20)}`,
       signal: currentPrice > indicators.sma20 ? 'BULLISH' : 'BEARISH',
       detail: '20-period arithmetic mean trend line',
     },
     {
       category: 'TREND',
       name: 'SMA 50',
-      value: `$${indicators.sma50.toFixed(2)}`,
+      value: `$${fPrice(indicators.sma50)}`,
       signal: currentPrice > indicators.sma50 ? 'BULLISH' : 'BEARISH',
       detail: '50-period arithmetic mean trend line',
     },
     {
       category: 'TREND',
       name: 'MACD (12, 26, 9)',
-      value: `${indicators.macd.macd.toFixed(2)} / Sig: ${indicators.macd.signal.toFixed(2)} (Hist: ${indicators.macd.hist.toFixed(2)})`,
+      value: `${indicators.macd.macd.toFixed(macdDecimals)} / Sig: ${indicators.macd.signal.toFixed(macdDecimals)} (Hist: ${indicators.macd.hist.toFixed(macdDecimals)})`,
       signal: indicators.interpretations['MACD']?.signal || 'NEUTRAL',
       detail: indicators.interpretations['MACD']?.reason || 'Convergence/divergence status',
     },
@@ -132,16 +147,16 @@ export const IndicatorsTable: React.FC<IndicatorsTableProps> = ({ indicators, cu
     {
       category: 'VOLATILITY',
       name: 'Bollinger Bands (20, 2)',
-      value: `Upper: $${indicators.bollinger.upper.toFixed(0)} | Lower: $${indicators.bollinger.lower.toFixed(0)}`,
+      value: `Upper: $${fCompact(indicators.bollinger.upper)} | Lower: $${fCompact(indicators.bollinger.lower)}`,
       signal: indicators.interpretations['BOLLINGER']?.signal || 'NEUTRAL',
       detail: `BandWidth: ${(indicators.bollinger.bandWidth * 100).toFixed(2)}% | %B: ${(indicators.bollinger.percentB * 100).toFixed(1)}%`,
     },
     {
       category: 'VOLATILITY',
       name: 'Average True Range (ATR 14)',
-      value: `$${indicators.atr.toFixed(2)}`,
+      value: `$${fPrice(indicators.atr)}`,
       signal: 'NEUTRAL',
-      detail: `Average candle volatility spread is $${indicators.atr.toFixed(0)} (~${((indicators.atr / currentPrice) * 100).toFixed(2)}% of price)`,
+      detail: `Average candle volatility spread is $${fCompact(indicators.atr)} (~${((indicators.atr / currentPrice) * 100).toFixed(2)}% of price)`,
     },
     {
       category: 'VOLATILITY',
@@ -155,14 +170,14 @@ export const IndicatorsTable: React.FC<IndicatorsTableProps> = ({ indicators, cu
     {
       category: 'VOLUME',
       name: 'Volume SMA (20)',
-      value: `${indicators.volumeSma.toFixed(2)} BTC`,
+      value: `${indicators.volumeSma.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${baseAsset}`,
       signal: indicators.volumeRatio > 1.2 ? 'BULLISH' : 'NEUTRAL',
       detail: `Current volume is ${(indicators.volumeRatio * 100).toFixed(0)}% of 20-SMA baseline`,
     },
     {
       category: 'VOLUME',
       name: 'VWAP',
-      value: `$${indicators.vwap.toFixed(2)}`,
+      value: `$${fPrice(indicators.vwap)}`,
       signal: indicators.interpretations['VWAP']?.signal || 'NEUTRAL',
       detail: indicators.interpretations['VWAP']?.reason || 'Institutional benchmark price',
     },

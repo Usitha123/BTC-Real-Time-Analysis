@@ -31,14 +31,22 @@ app.get('/api/health', (_req, res) => {
   });
 });
 
-// Proxy for Binance REST API to guarantee zero CORS or firewall/region blocking issues
+// Proxy for Binance USD-M Futures REST API (supports all 500+ perpetual trading pairs, with Spot fallback)
 app.get('/api/binance/klines', async (req, res) => {
   try {
-    const symbol = (req.query.symbol as string) || 'BTCUSDT';
+    const symbol = ((req.query.symbol as string) || 'BTCUSDT').toUpperCase();
     const interval = (req.query.interval as string) || '1m';
     const limit = (req.query.limit as string) || '200';
-    const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
-    const response = await fetch(url, { headers: { 'User-Agent': 'BTC-AI-Predictor' } });
+    let response = await fetch(
+      `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`,
+      { headers: { 'User-Agent': 'Crypto-Signal-Desk' } }
+    );
+    if (!response.ok) {
+      response = await fetch(
+        `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`,
+        { headers: { 'User-Agent': 'Crypto-Signal-Desk' } }
+      );
+    }
     if (!response.ok) {
       return res.status(response.status).json({ error: `Binance error: ${response.statusText}` });
     }
@@ -51,8 +59,11 @@ app.get('/api/binance/klines', async (req, res) => {
 
 app.get('/api/binance/ticker', async (req, res) => {
   try {
-    const symbol = (req.query.symbol as string) || 'BTCUSDT';
-    const response = await fetch(`https://api.binance.com/api/v3/ticker/24hr?symbol=${symbol}`);
+    const symbol = ((req.query.symbol as string) || 'BTCUSDT').toUpperCase();
+    let response = await fetch(`https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=${symbol}`);
+    if (!response.ok) {
+      response = await fetch(`https://api.binance.com/api/v3/ticker/24hr?symbol=${symbol}`);
+    }
     if (!response.ok) {
       return res.status(response.status).json({ error: `Binance ticker error` });
     }
@@ -65,9 +76,12 @@ app.get('/api/binance/ticker', async (req, res) => {
 
 app.get('/api/binance/depth', async (req, res) => {
   try {
-    const symbol = (req.query.symbol as string) || 'BTCUSDT';
+    const symbol = ((req.query.symbol as string) || 'BTCUSDT').toUpperCase();
     const limit = (req.query.limit as string) || '20';
-    const response = await fetch(`https://api.binance.com/api/v3/depth?symbol=${symbol}&limit=${limit}`);
+    let response = await fetch(`https://fapi.binance.com/fapi/v1/depth?symbol=${symbol}&limit=${limit}`);
+    if (!response.ok) {
+      response = await fetch(`https://api.binance.com/api/v3/depth?symbol=${symbol}&limit=${limit}`);
+    }
     if (!response.ok) {
       return res.status(response.status).json({ error: `Binance depth error` });
     }
@@ -80,9 +94,12 @@ app.get('/api/binance/depth', async (req, res) => {
 
 app.get('/api/binance/trades', async (req, res) => {
   try {
-    const symbol = (req.query.symbol as string) || 'BTCUSDT';
+    const symbol = ((req.query.symbol as string) || 'BTCUSDT').toUpperCase();
     const limit = (req.query.limit as string) || '30';
-    const response = await fetch(`https://api.binance.com/api/v3/trades?symbol=${symbol}&limit=${limit}`);
+    let response = await fetch(`https://fapi.binance.com/fapi/v1/trades?symbol=${symbol}&limit=${limit}`);
+    if (!response.ok) {
+      response = await fetch(`https://api.binance.com/api/v3/trades?symbol=${symbol}&limit=${limit}`);
+    }
     if (!response.ok) {
       return res.status(response.status).json({ error: `Binance trades error` });
     }
@@ -93,14 +110,72 @@ app.get('/api/binance/trades', async (req, res) => {
   }
 });
 
-let cachedFuturesMetrics: { timestamp: number; data: any } | null = null;
+let cachedFuturesSymbols: { timestamp: number; data: any[] } | null = null;
+
+app.get('/api/binance/futures/symbols', async (_req, res) => {
+  try {
+    const now = Date.now();
+    if (cachedFuturesSymbols && now - cachedFuturesSymbols.timestamp < 60000) {
+      return res.json(cachedFuturesSymbols.data);
+    }
+
+    const [infoRes, tickersRes] = await Promise.allSettled([
+      fetch('https://fapi.binance.com/fapi/v1/exchangeInfo'),
+      fetch('https://fapi.binance.com/fapi/v1/ticker/24hr'),
+    ]);
+
+    const infoJson = infoRes.status === 'fulfilled' && infoRes.value.ok ? await infoRes.value.json() : null;
+    const tickersJson = tickersRes.status === 'fulfilled' && tickersRes.value.ok ? await tickersRes.value.json() : null;
+
+    if (!infoJson || !Array.isArray(infoJson.symbols)) {
+      return res.status(502).json({ error: 'Unable to load Binance Futures exchange symbols' });
+    }
+
+    const tickerMap = new Map<string, any>();
+    if (Array.isArray(tickersJson)) {
+      for (const t of tickersJson) {
+        if (t && t.symbol) tickerMap.set(t.symbol, t);
+      }
+    }
+
+    const pairs = infoJson.symbols
+      .filter(
+        (s: any) =>
+          s.contractType === 'PERPETUAL' &&
+          s.status === 'TRADING' &&
+          s.quoteAsset === 'USDT'
+      )
+      .map((s: any) => {
+        const t = tickerMap.get(s.symbol);
+        return {
+          symbol: s.symbol,
+          baseAsset: s.baseAsset,
+          quoteAsset: s.quoteAsset,
+          pricePrecision: typeof s.pricePrecision === 'number' ? s.pricePrecision : 2,
+          quantityPrecision: typeof s.quantityPrecision === 'number' ? s.quantityPrecision : 3,
+          lastPrice: t ? parseFloat(t.lastPrice || '0') : 0,
+          priceChangePercent: t ? parseFloat(t.priceChangePercent || '0') : 0,
+          quoteVolume: t ? parseFloat(t.quoteVolume || '0') : 0,
+        };
+      })
+      .sort((a: any, b: any) => b.quoteVolume - a.quoteVolume);
+
+    cachedFuturesSymbols = { timestamp: now, data: pairs };
+    return res.json(pairs);
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || 'Failed to load futures symbols' });
+  }
+});
+
+const cachedFuturesMetrics = new Map<string, { timestamp: number; data: any }>();
 
 app.get('/api/binance/futures/metrics', async (req, res) => {
   try {
-    const symbol = (req.query.symbol as string) || 'BTCUSDT';
+    const symbol = ((req.query.symbol as string) || 'BTCUSDT').toUpperCase();
     const now = Date.now();
-    if (cachedFuturesMetrics && now - cachedFuturesMetrics.timestamp < 30000) {
-      return res.json(cachedFuturesMetrics.data);
+    const cached = cachedFuturesMetrics.get(symbol);
+    if (cached && now - cached.timestamp < 30000) {
+      return res.json(cached.data);
     }
 
     const [premRes, oiRes, lsRes, takerRes] = await Promise.allSettled([
@@ -146,15 +221,15 @@ app.get('/api/binance/futures/metrics', async (req, res) => {
       fetchedAt: now,
     };
 
-    cachedFuturesMetrics = { timestamp: now, data: payload };
+    cachedFuturesMetrics.set(symbol, { timestamp: now, data: payload });
     return res.json(payload);
   } catch (error: any) {
     return res.status(500).json({ error: error.message || 'Failed to fetch futures metrics' });
   }
 });
 
-// In-memory cache for AI market analysis
-let lastCachedAnalysis: { timestamp: number; price: number; analysis: any } | null = null;
+// In-memory cache for AI market analysis keyed by symbol
+const lastCachedAnalysis = new Map<string, { timestamp: number; price: number; analysis: any }>();
 
 // Gemini AI Market Analysis Endpoint
 app.post('/api/ai/analysis', async (req, res) => {
@@ -164,46 +239,50 @@ app.post('/api/ai/analysis', async (req, res) => {
       return res.status(400).json({ error: 'Missing marketSnapshot payload' });
     }
 
+    const symbol = (marketSnapshot.symbol || 'BTCUSDT').toUpperCase();
     const price = marketSnapshot.currentPrice;
     const rsi = marketSnapshot.indicators?.rsi || 50;
     const isBull = rsi > 50;
-    const atr = marketSnapshot.indicators?.atr || Math.round(price * 0.005);
+    const atr = marketSnapshot.indicators?.atr || price * 0.005;
     const ema20 = marketSnapshot.indicators?.ema20 || price;
 
     // Check cache: serve immediately if within 30s and price within 0.3%
     const now = Date.now();
+    const cached = lastCachedAnalysis.get(symbol);
     if (
-      lastCachedAnalysis &&
-      now - lastCachedAnalysis.timestamp < 30000 &&
-      Math.abs(price - lastCachedAnalysis.price) / lastCachedAnalysis.price < 0.003
+      cached &&
+      now - cached.timestamp < 30000 &&
+      Math.abs(price - cached.price) / cached.price < 0.003
     ) {
       return res.json({
         success: true,
-        timestamp: lastCachedAnalysis.timestamp,
-        analysis: lastCachedAnalysis.analysis,
+        timestamp: cached.timestamp,
+        analysis: cached.analysis,
       });
     }
+
+    const fmt = (n: number) => (n >= 10 ? n.toFixed(2) : n >= 1 ? n.toFixed(4) : n.toFixed(6));
 
     // High-fidelity quantitative synthesis generator
     const generateAnalyticalFallback = () => ({
       marketTrend: isBull ? 'Mild Bullish Accumulation' : 'Mild Bearish Distribution',
       shortTermDirection: isBull ? 'Bullish Expansion' : 'Bearish Retracement',
       bullishFactors: [
-        `Price maintaining baseline above key moving average cluster at $${(price * 0.992).toFixed(0)}`,
-        `Positive order flow volume absorption visible in recent candle prints`,
-        `RSI reading (${rsi.toFixed(1)}) maintains structural support above critical floor`,
+        `${symbol} holding baseline above key moving average cluster at $${fmt(price * 0.992)}`,
+        `Positive order flow volume absorption visible in recent closed candles`,
+        `RSI reading (${rsi.toFixed(1)}) maintains structural support above floor`,
       ],
       bearishFactors: [
-        `Overhead resistance band near $${(price * 1.012).toFixed(0)} limiting immediate breakout velocity`,
-        `Macro liquidity shifts creating transient order book imbalances`,
+        `Overhead resistance band near $${fmt(price * 1.012)} limiting immediate breakout velocity`,
+        `Perpetual liquidity shifts creating transient order book imbalances`,
       ],
       momentumAnalysis: `Momentum indicators reflect moderate velocity with RSI at ${rsi.toFixed(1)} and controlled directional drift.`,
-      volatilityAnalysis: `Bollinger envelopes suggest moderate compression with ATR at $${atr.toFixed(0)}.`,
-      keySupportLevels: [parseFloat((price * 0.991).toFixed(0)), parseFloat((price * 0.978).toFixed(0))],
-      keyResistanceLevels: [parseFloat((price * 1.012).toFixed(0)), parseFloat((price * 1.025).toFixed(0))],
-      reversalConditions: `A break below the 20-period moving average ($${ema20.toFixed(0)}) with expanding volume would invalidate current bias.`,
+      volatilityAnalysis: `Bollinger envelopes suggest moderate compression with ATR at $${fmt(atr)}.`,
+      keySupportLevels: [Number(fmt(price * 0.991)), Number(fmt(price * 0.978))],
+      keyResistanceLevels: [Number(fmt(price * 1.012)), Number(fmt(price * 1.025))],
+      reversalConditions: `A break below the 20-period moving average ($${fmt(ema20)}) with expanding volume would invalidate current bias.`,
       marketUncertainty: 'Moderate (Standard volatility regime)',
-      executiveSummary: `Bitcoin is currently trading near $${price.toLocaleString()} with ${isBull ? 'positive' : 'subdued'} momentum dynamics. Multi-timeframe structure favors measured continuation while watching key pivot bands.`,
+      executiveSummary: `${symbol} is currently trading near $${fmt(price)} with ${isBull ? 'positive' : 'subdued'} momentum dynamics. Multi-timeframe structure favors measured continuation while watching key pivot bands.`,
     });
 
     let parsed: any = null;
@@ -213,16 +292,16 @@ app.post('/api/ai/analysis', async (req, res) => {
     if (apiKey && apiKey !== 'MY_GEMINI_API_KEY' && apiKey.length > 5) {
       try {
         const prompt = `
-You are a senior quantitative analyst and financial data scientist evaluating live Bitcoin (BTC/USDT) market data.
+You are a senior quantitative analyst evaluating live ${symbol} Perpetual Futures market data.
 Analyze the following REAL structured market data:
-- Current BTC Price: $${marketSnapshot.currentPrice}
+- Current ${symbol} Price: $${marketSnapshot.currentPrice}
 - 24h Price Change: ${marketSnapshot.priceChangePercent}% (High: $${marketSnapshot.high24h}, Low: $${marketSnapshot.low24h})
-- 24h Volume: ${marketSnapshot.volume24h} BTC
+- 24h Volume: ${marketSnapshot.volume24h}
 - Technical Indicators:
   * RSI (14): ${rsi.toFixed(1)}
-  * MACD: ${marketSnapshot.indicators?.macd?.macd?.toFixed?.(2) ?? 'N/A'} (Hist: ${marketSnapshot.indicators?.macd?.hist?.toFixed?.(2) ?? 'N/A'})
-  * EMA 20: $${marketSnapshot.indicators?.ema20?.toFixed?.(0) ?? 'N/A'} | EMA 50: $${marketSnapshot.indicators?.ema50?.toFixed?.(0) ?? 'N/A'}
-  * ATR (14): $${atr.toFixed(0)}
+  * MACD: ${marketSnapshot.indicators?.macd?.macd?.toFixed?.(4) ?? 'N/A'} (Hist: ${marketSnapshot.indicators?.macd?.hist?.toFixed?.(4) ?? 'N/A'})
+  * EMA 20: $${fmt(ema20)} | EMA 50: $${marketSnapshot.indicators?.ema50 ? fmt(marketSnapshot.indicators.ema50) : 'N/A'}
+  * ATR (14): $${fmt(atr)}
 - Multi-timeframe trend alignment:
   ${JSON.stringify(marketSnapshot.multiTimeframe || {})}
 
@@ -285,11 +364,11 @@ Provide an institutional assessment. Return strictly valid JSON.
       parsed = generateAnalyticalFallback();
     }
 
-    lastCachedAnalysis = {
+    lastCachedAnalysis.set(symbol, {
       timestamp: now,
       price,
       analysis: parsed,
-    };
+    });
 
     return res.json({
       success: true,

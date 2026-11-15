@@ -12,6 +12,12 @@ import {
   calculateEMA,
   calculateRSI,
 } from './indicators';
+import {
+  getPriceDecimals,
+  roundToPricePrecision,
+  formatCoinPrice,
+  formatCompactCoinPrice,
+} from '../utils/formatters';
 
 export type CriterionSignal = 'BULLISH' | 'BEARISH' | 'NEUTRAL';
 
@@ -94,6 +100,8 @@ export const HORIZON_CONFIG: Record<TradeHorizon, HorizonMeta> = {
 export const TRADE_HORIZONS: TradeHorizon[] = ['1h', '2h', '5h', '10h', '24h'];
 
 export interface TradeSignalSetup {
+  symbol: string;
+  pricePrecision: number;
   horizon: TradeHorizon;
   horizonLabel: string;
   durationMs: number;
@@ -223,7 +231,7 @@ function detectCandlestickPattern(closedCandles: Candle[]): {
   const prev2 = closedCandles[closedCandles.length - 3];
 
   const currBody = Math.abs(curr.close - curr.open);
-  const currRange = Math.max(0.01, curr.high - curr.low);
+  const currRange = Math.max(curr.close * 1e-6, curr.high - curr.low, 1e-10);
   const prevBody = Math.abs(prev.close - prev.open);
   const currIsBull = curr.close >= curr.open;
   const prevIsBull = prev.close >= prev.open;
@@ -297,7 +305,8 @@ function detectCandlestickPattern(closedCandles: Candle[]): {
 function findPreviousChartSwingsAndPivots(
   closedCandles: Candle[],
   referencePrice: number,
-  lookbackCount: number
+  lookbackCount: number,
+  decimals: number
 ): {
   swingSupport: number;
   swingResistance: number;
@@ -372,15 +381,17 @@ function findPreviousChartSwingsAndPivots(
   const distToSupport = (referencePrice - swingSupport) / referencePrice;
   const distToResistance = (swingResistance - referencePrice) / referencePrice;
 
+  const fp = (v: number) => formatCompactCoinPrice(v, referencePrice, decimals);
+
   let nearestStructureSignal: CriterionSignal = 'NEUTRAL';
-  let reason = `Pivot $${pivotPoint.toFixed(0)} · Support $${swingSupport.toFixed(0)} / Resistance $${swingResistance.toFixed(0)}`;
+  let reason = `Pivot $${fp(pivotPoint)} · Support $${fp(swingSupport)} / Resistance $${fp(swingResistance)}`;
 
   if (referencePrice > pivotPoint && distToSupport < distToResistance * 0.9) {
     nearestStructureSignal = 'BULLISH';
-    reason = `Above Pivot $${pivotPoint.toFixed(0)} with support floor $${swingSupport.toFixed(0)}`;
+    reason = `Above Pivot $${fp(pivotPoint)} with support floor $${fp(swingSupport)}`;
   } else if (referencePrice < pivotPoint && distToResistance < distToSupport * 0.9) {
     nearestStructureSignal = 'BEARISH';
-    reason = `Below Pivot $${pivotPoint.toFixed(0)} with resistance ceiling $${swingResistance.toFixed(0)}`;
+    reason = `Below Pivot $${fp(pivotPoint)} with resistance ceiling $${fp(swingResistance)}`;
   }
 
   return {
@@ -507,7 +518,9 @@ export function analyzeHorizonTradeSetup(
   rawCandles: Candle[],
   horizon: TradeHorizon,
   multiTfSignals: MultiTimeframeSignal[],
-  futuresMetrics: FuturesMarketMetrics | null = null
+  futuresMetrics: FuturesMarketMetrics | null = null,
+  symbol: string = 'BTCUSDT',
+  pricePrecision?: number
 ): TradeSignalSetup | null {
   const meta = HORIZON_CONFIG[horizon];
   const closedCandles = getStrictlyClosedCandles(rawCandles);
@@ -519,6 +532,12 @@ export function analyzeHorizonTradeSetup(
   const lastClosed = closedCandles[closedCandles.length - 1];
   const referencePrice = lastClosed.close;
   if (referencePrice <= 0) return null;
+
+  const decimals = getPriceDecimals(referencePrice, pricePrecision);
+  const rp = (v: number) => roundToPricePrecision(v, referencePrice, decimals);
+  const fp = (v: number) => formatCompactCoinPrice(v, referencePrice, decimals);
+  const fFull = (v: number) => formatCoinPrice(v, referencePrice, decimals);
+  const histDecimals = Math.max(2, decimals);
 
   const criteria: TechnicalCriterion[] = [];
 
@@ -541,7 +560,7 @@ export function analyzeHorizonTradeSetup(
     id: 'ema_stack',
     name: 'EMA Stack (9 / 20 / 50)',
     category: 'Trend',
-    value: `EMA9 $${indicators.ema9.toFixed(0)} · EMA20 $${indicators.ema20.toFixed(0)}`,
+    value: `EMA9 $${fp(indicators.ema9)} · EMA20 $${fp(indicators.ema20)}`,
     signal: emaSignal,
     weight: 1.5,
     reason: bullEmaStack
@@ -564,7 +583,7 @@ export function analyzeHorizonTradeSetup(
     id: 'macro_ma',
     name: 'Macro MAs (EMA 100/200 & SMA 20/50)',
     category: 'Trend',
-    value: `EMA200 $${indicators.ema200.toFixed(0)}`,
+    value: `EMA200 $${fp(indicators.ema200)}`,
     signal: macroSignal,
     weight: 1.2,
     reason:
@@ -581,13 +600,13 @@ export function analyzeHorizonTradeSetup(
     id: 'supertrend',
     name: 'Supertrend (10, 3)',
     category: 'Trend',
-    value: `Stop $${supertrend.level.toFixed(0)}`,
+    value: `Stop $${fp(supertrend.level)}`,
     signal: supertrend.direction,
     weight: 1.4,
     reason:
       supertrend.direction === 'BULLISH'
-        ? `Uptrend confirmed with trailing Supertrend floor at $${supertrend.level.toFixed(0)}`
-        : `Downtrend confirmed with trailing Supertrend ceiling at $${supertrend.level.toFixed(0)}`,
+        ? `Uptrend confirmed with trailing Supertrend floor at $${fp(supertrend.level)}`
+        : `Downtrend confirmed with trailing Supertrend ceiling at $${fp(supertrend.level)}`,
   });
 
   // 4. MACD (12, 26, 9)
@@ -597,7 +616,7 @@ export function analyzeHorizonTradeSetup(
     id: 'macd',
     name: 'MACD (12, 26, 9)',
     category: 'Trend',
-    value: `Hist ${indicators.macd.hist >= 0 ? '+' : ''}${indicators.macd.hist.toFixed(1)}`,
+    value: `Hist ${indicators.macd.hist >= 0 ? '+' : ''}${indicators.macd.hist.toFixed(histDecimals)}`,
     signal: macdBull ? 'BULLISH' : macdBear ? 'BEARISH' : 'NEUTRAL',
     weight: 1.3,
     reason: macdBull
@@ -725,16 +744,16 @@ export function analyzeHorizonTradeSetup(
   let bbReason = `Trading cleanly inside Bollinger envelope (%B ${(indicators.bollinger.percentB * 100).toFixed(0)}%)`;
   if (indicators.bollinger.percentB < 0.18) {
     bbSignal = 'BULLISH';
-    bbReason = `Testing lower 2σ statistical band ($${indicators.bollinger.lower.toFixed(0)})`;
+    bbReason = `Testing lower 2σ statistical band ($${fp(indicators.bollinger.lower)})`;
   } else if (indicators.bollinger.percentB > 0.88) {
     bbSignal = 'BEARISH';
-    bbReason = `Extended against upper 2σ band ($${indicators.bollinger.upper.toFixed(0)})`;
+    bbReason = `Extended against upper 2σ band ($${fp(indicators.bollinger.upper)})`;
   } else if (indicators.bollinger.percentB > 0.56) {
     bbSignal = 'BULLISH';
-    bbReason = `Sustaining above Bollinger midline ($${indicators.bollinger.middle.toFixed(0)})`;
+    bbReason = `Sustaining above Bollinger midline ($${fp(indicators.bollinger.middle)})`;
   } else if (indicators.bollinger.percentB < 0.44) {
     bbSignal = 'BEARISH';
-    bbReason = `Pressured below Bollinger midline ($${indicators.bollinger.middle.toFixed(0)})`;
+    bbReason = `Pressured below Bollinger midline ($${fp(indicators.bollinger.middle)})`;
   }
   criteria.push({
     id: 'bollinger',
@@ -753,7 +772,7 @@ export function analyzeHorizonTradeSetup(
     id: 'atr_hv',
     name: 'ATR (14) & Historical Volatility',
     category: 'Volatility',
-    value: `ATR $${indicators.atr.toFixed(0)} (${atrPct.toFixed(2)}%)`,
+    value: `ATR $${fFull(indicators.atr)} (${atrPct.toFixed(2)}%)`,
     signal: volRegimeHealthy ? (emaSignal !== 'NEUTRAL' ? emaSignal : 'NEUTRAL') : 'NEUTRAL',
     weight: 0.7,
     reason: volRegimeHealthy
@@ -768,7 +787,7 @@ export function analyzeHorizonTradeSetup(
     id: 'vwap',
     name: 'VWAP Fair Value Benchmark',
     category: 'Volume',
-    value: `$${indicators.vwap.toFixed(0)} (${vwapDeltaPct >= 0 ? '+' : ''}${vwapDeltaPct.toFixed(2)}%)`,
+    value: `$${fp(indicators.vwap)} (${vwapDeltaPct >= 0 ? '+' : ''}${vwapDeltaPct.toFixed(2)}%)`,
     signal: Math.abs(vwapDeltaPct) < 0.03 ? 'NEUTRAL' : aboveVwap ? 'BULLISH' : 'BEARISH',
     weight: 1.3,
     reason: aboveVwap
@@ -795,12 +814,12 @@ export function analyzeHorizonTradeSetup(
   });
 
   // 14. Previous Chart Swings & Floor Pivots
-  const swings = findPreviousChartSwingsAndPivots(closedCandles, referencePrice, meta.swingLookback);
+  const swings = findPreviousChartSwingsAndPivots(closedCandles, referencePrice, meta.swingLookback, decimals);
   criteria.push({
     id: 'chart_swings',
     name: 'Previous Swings & Floor Pivots',
     category: 'Chart Structure',
-    value: `S $${swings.swingSupport.toFixed(0)} · R $${swings.swingResistance.toFixed(0)}`,
+    value: `S $${fp(swings.swingSupport)} · R $${fp(swings.swingResistance)}`,
     signal: swings.nearestStructureSignal,
     weight: 1.4,
     reason: swings.reason,
@@ -955,16 +974,13 @@ export function analyzeHorizonTradeSetup(
       swings.swingSupport + horizonAtr * 0.25,
       Math.min(referencePrice, referencePrice * 0.55 + indicators.ema9 * 0.25 + indicators.vwap * 0.2)
     );
-    entryPrice = parseFloat(pullbackRef.toFixed(2));
-    entryZone = [
-      parseFloat((entryPrice - baseAtr * 0.25).toFixed(2)),
-      parseFloat((entryPrice + baseAtr * 0.25).toFixed(2)),
-    ];
+    entryPrice = rp(pullbackRef);
+    entryZone = [rp(entryPrice - baseAtr * 0.25), rp(entryPrice + baseAtr * 0.25)];
 
     const structuralFloor = Math.min(swings.swingSupport, swings.pivotS1);
     const rawStop = Math.min(structuralFloor - baseAtr * 0.3, entryPrice - horizonAtr * 1.15);
     const maxStopCap = entryPrice - horizonAtr * 2.3;
-    stopLoss = parseFloat(Math.max(maxStopCap, rawStop).toFixed(2));
+    stopLoss = rp(Math.max(maxStopCap, rawStop));
     const riskDist = Math.max(horizonAtr * 0.85, entryPrice - stopLoss);
 
     const candidateTp1 = Math.max(swings.swingResistance, swings.pivotR1, indicators.bollinger.upper);
@@ -972,25 +988,20 @@ export function analyzeHorizonTradeSetup(
       candidateTp1 >= entryPrice + riskDist * 1.45
         ? Math.min(candidateTp1, entryPrice + riskDist * 2.2)
         : entryPrice + riskDist * 1.7;
-    takeProfit1 = parseFloat(boundedTp1.toFixed(2));
-    takeProfit2 = parseFloat(
-      Math.max(takeProfit1 + riskDist * 0.85, swings.pivotR2, entryPrice + riskDist * 2.75).toFixed(2)
-    );
+    takeProfit1 = rp(boundedTp1);
+    takeProfit2 = rp(Math.max(takeProfit1 + riskDist * 0.85, swings.pivotR2, entryPrice + riskDist * 2.75));
   } else if (action === 'SELL') {
     const bounceRef = Math.min(
       swings.swingResistance - horizonAtr * 0.25,
       Math.max(referencePrice, referencePrice * 0.55 + indicators.ema9 * 0.25 + indicators.vwap * 0.2)
     );
-    entryPrice = parseFloat(bounceRef.toFixed(2));
-    entryZone = [
-      parseFloat((entryPrice - baseAtr * 0.25).toFixed(2)),
-      parseFloat((entryPrice + baseAtr * 0.25).toFixed(2)),
-    ];
+    entryPrice = rp(bounceRef);
+    entryZone = [rp(entryPrice - baseAtr * 0.25), rp(entryPrice + baseAtr * 0.25)];
 
     const structuralCeiling = Math.max(swings.swingResistance, swings.pivotR1);
     const rawStop = Math.max(structuralCeiling + baseAtr * 0.3, entryPrice + horizonAtr * 1.15);
     const maxStopCap = entryPrice + horizonAtr * 2.3;
-    stopLoss = parseFloat(Math.min(maxStopCap, rawStop).toFixed(2));
+    stopLoss = rp(Math.min(maxStopCap, rawStop));
     const riskDist = Math.max(horizonAtr * 0.85, stopLoss - entryPrice);
 
     const candidateTp1 = Math.min(swings.swingSupport, swings.pivotS1, indicators.bollinger.lower);
@@ -998,19 +1009,14 @@ export function analyzeHorizonTradeSetup(
       candidateTp1 <= entryPrice - riskDist * 1.45
         ? Math.max(candidateTp1, entryPrice - riskDist * 2.2)
         : entryPrice - riskDist * 1.7;
-    takeProfit1 = parseFloat(boundedTp1.toFixed(2));
-    takeProfit2 = parseFloat(
-      Math.min(takeProfit1 - riskDist * 0.85, swings.pivotS2, entryPrice - riskDist * 2.75).toFixed(2)
-    );
+    takeProfit1 = rp(boundedTp1);
+    takeProfit2 = rp(Math.min(takeProfit1 - riskDist * 0.85, swings.pivotS2, entryPrice - riskDist * 2.75));
   } else {
-    entryPrice = parseFloat(referencePrice.toFixed(2));
-    entryZone = [
-      parseFloat((swings.swingSupport + baseAtr * 0.2).toFixed(2)),
-      parseFloat((swings.swingResistance - baseAtr * 0.2).toFixed(2)),
-    ];
-    takeProfit1 = parseFloat(Math.max(swings.swingResistance, referencePrice + horizonAtr * 1.3).toFixed(2));
-    takeProfit2 = parseFloat(Math.max(swings.pivotR1, takeProfit1 + horizonAtr * 0.9).toFixed(2));
-    stopLoss = parseFloat(Math.min(swings.swingSupport, referencePrice - horizonAtr * 1.0).toFixed(2));
+    entryPrice = rp(referencePrice);
+    entryZone = [rp(swings.swingSupport + baseAtr * 0.2), rp(swings.swingResistance - baseAtr * 0.2)];
+    takeProfit1 = rp(Math.max(swings.swingResistance, referencePrice + horizonAtr * 1.3));
+    takeProfit2 = rp(Math.max(swings.pivotR1, takeProfit1 + horizonAtr * 0.9));
+    stopLoss = rp(Math.min(swings.swingSupport, referencePrice - horizonAtr * 1.0));
   }
 
   const tp1Pct = parseFloat((((takeProfit1 - entryPrice) / entryPrice) * 100).toFixed(2));
@@ -1037,34 +1043,34 @@ export function analyzeHorizonTradeSetup(
 
   const summary =
     action === 'BUY'
-      ? `Locked on ${meta.chartTf} closed candle ($${referencePrice.toLocaleString()}). ${bullishCount} of ${totalCriteria} indicators align bullish (${pattern.name}, Supertrend $${supertrend.level.toFixed(0)}). Hold target window: ${meta.label.toLowerCase()}.`
+      ? `${symbol} locked on ${meta.chartTf} closed candle ($${fFull(referencePrice)}). ${bullishCount} of ${totalCriteria} indicators align bullish (${pattern.name}, Supertrend $${fp(supertrend.level)}). Hold target window: ${meta.label.toLowerCase()}.`
       : action === 'SELL'
-      ? `Locked on ${meta.chartTf} closed candle ($${referencePrice.toLocaleString()}). ${bearishCount} of ${totalCriteria} indicators align bearish (${pattern.name}, Supertrend $${supertrend.level.toFixed(0)}). Hold target window: ${meta.label.toLowerCase()}.`
-      : `Locked on ${meta.chartTf} closed candle ($${referencePrice.toLocaleString()}). Indicators are split (${bullishCount} bullish vs ${bearishCount} bearish) between $${swings.swingSupport.toFixed(0)} and $${swings.swingResistance.toFixed(0)}. Wait for breakout confirmation.`;
+      ? `${symbol} locked on ${meta.chartTf} closed candle ($${fFull(referencePrice)}). ${bearishCount} of ${totalCriteria} indicators align bearish (${pattern.name}, Supertrend $${fp(supertrend.level)}). Hold target window: ${meta.label.toLowerCase()}.`
+      : `${symbol} locked on ${meta.chartTf} closed candle ($${fFull(referencePrice)}). Indicators are split (${bullishCount} bullish vs ${bearishCount} bearish) between $${fp(swings.swingSupport)} and $${fp(swings.swingResistance)}. Wait for breakout confirmation.`;
 
   // Mathematical Leverage Sizing: keep Liquidation safely outside Stop Loss!
   const stopDistPct = Math.max(0.35, Math.abs(slPct));
   const maxSafeLeverage = Math.max(2, Math.min(35, Math.floor(100 / (stopDistPct * 1.45 + 0.5))));
   const recommendedLeverage = Math.max(2, Math.min(20, Math.floor(100 / (stopDistPct * 2.2 + 0.5))));
-  const marginModeRecommendation: 'Isolated' | 'Cross' =
-    horizon === '1h' || horizon === '2h' || horizon === '5h' ? 'Isolated' : 'Isolated';
+  const marginModeRecommendation: 'Isolated' | 'Cross' = 'Isolated';
 
   const fundingSettlements = Math.max(1, Math.ceil(meta.durationMs / (8 * 60 * 60 * 1000)));
   const rawFundingRatePct = futuresMetrics ? futuresMetrics.fundingRate * 100 : 0.01;
-  // Positive funding costs Longs and pays Shorts
   const estimatedFundingImpactPct =
     action === 'SELL'
       ? parseFloat((rawFundingRatePct * fundingSettlements).toFixed(4))
       : parseFloat((-rawFundingRatePct * fundingSettlements).toFixed(4));
 
   return {
+    symbol: symbol.toUpperCase(),
+    pricePrecision: decimals,
     horizon,
     horizonLabel: meta.label,
     durationMs: meta.durationMs,
     action,
     headline,
     timeframe: meta.chartTf,
-    referenceClosePrice: parseFloat(referencePrice.toFixed(2)),
+    referenceClosePrice: rp(referencePrice),
     closedCandleTime: lastClosed.time,
     entryPrice,
     entryZone,
@@ -1075,12 +1081,12 @@ export function analyzeHorizonTradeSetup(
     tp2Pct,
     slPct,
     riskRewardRatio,
-    swingSupport: parseFloat(swings.swingSupport.toFixed(2)),
-    swingResistance: parseFloat(swings.swingResistance.toFixed(2)),
-    pivotPoint: parseFloat(swings.pivotPoint.toFixed(2)),
-    pivotR1: parseFloat(swings.pivotR1.toFixed(2)),
-    pivotS1: parseFloat(swings.pivotS1.toFixed(2)),
-    supertrendLevel: parseFloat(supertrend.level.toFixed(2)),
+    swingSupport: rp(swings.swingSupport),
+    swingResistance: rp(swings.swingResistance),
+    pivotPoint: rp(swings.pivotPoint),
+    pivotR1: rp(swings.pivotR1),
+    pivotS1: rp(swings.pivotS1),
+    supertrendLevel: rp(supertrend.level),
     detectedPattern: pattern.name,
     bullishCount,
     bearishCount,
@@ -1106,7 +1112,9 @@ export function analyzeAllHorizons(
   horizonCandlesMap: Partial<Record<'15m' | '30m' | '1h' | '4h', Candle[]>>,
   multiTfSignals: MultiTimeframeSignal[],
   fallbackCandles: Candle[],
-  futuresMetrics: FuturesMarketMetrics | null = null
+  futuresMetrics: FuturesMarketMetrics | null = null,
+  symbol: string = 'BTCUSDT',
+  pricePrecision?: number
 ): Record<TradeHorizon, TradeSignalSetup | null> {
   const result: Record<TradeHorizon, TradeSignalSetup | null> = {
     '1h': null,
@@ -1120,7 +1128,14 @@ export function analyzeAllHorizons(
     const meta = HORIZON_CONFIG[h];
     const source = horizonCandlesMap[meta.chartTf];
     const candlesToUse = source && source.length >= 50 ? source : fallbackCandles;
-    result[h] = analyzeHorizonTradeSetup(candlesToUse, h, multiTfSignals, futuresMetrics);
+    result[h] = analyzeHorizonTradeSetup(
+      candlesToUse,
+      h,
+      multiTfSignals,
+      futuresMetrics,
+      symbol,
+      pricePrecision
+    );
   }
 
   return result;

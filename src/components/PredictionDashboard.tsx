@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { PredictionResult, PredictionTimeframe } from '../types/crypto';
+import { formatCoinPrice, formatCompactCoinPrice } from '../utils/formatters';
 import {
   TrendingUp,
   TrendingDown,
@@ -18,6 +19,7 @@ interface PredictionDashboardProps {
   onSelectTimeframe: (tf: PredictionTimeframe) => void;
   currentPrice: number;
   onCommitPrediction?: (pred: PredictionResult) => void;
+  pricePrecision?: number;
 }
 
 const TIMEFRAMES: PredictionTimeframe[] = ['1m', '5m', '10m', '15m', '30m', '60m'];
@@ -27,6 +29,7 @@ export const PredictionDashboard: React.FC<PredictionDashboardProps> = ({
   activeTimeframe,
   onSelectTimeframe,
   currentPrice,
+  pricePrecision,
 }) => {
   // Live ticker for countdown timer
   const [now, setNow] = useState(Date.now());
@@ -155,7 +158,7 @@ export const PredictionDashboard: React.FC<PredictionDashboardProps> = ({
                 <div className="flex items-baseline justify-between">
                   <span className="text-[10px] text-slate-400 uppercase font-mono">Target:</span>
                   <span className="font-mono text-base font-extrabold text-slate-100 tracking-tight">
-                    ${pred.predictedPrice.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}
+                    ${formatCoinPrice(pred.predictedPrice, currentPrice || pred.predictedPrice, pricePrecision)}
                   </span>
                 </div>
 
@@ -163,7 +166,7 @@ export const PredictionDashboard: React.FC<PredictionDashboardProps> = ({
                 <div className="flex items-center justify-between text-[10px] font-mono text-slate-400 mt-1">
                   <span>Range:</span>
                   <span className="text-slate-300">
-                    ${pred.expectedRange[0].toFixed(0)} - ${pred.expectedRange[1].toFixed(0)}
+                    ${formatCompactCoinPrice(pred.expectedRange[0], currentPrice || pred.predictedPrice, pricePrecision)} - ${formatCompactCoinPrice(pred.expectedRange[1], currentPrice || pred.predictedPrice, pricePrecision)}
                   </span>
                 </div>
               </div>

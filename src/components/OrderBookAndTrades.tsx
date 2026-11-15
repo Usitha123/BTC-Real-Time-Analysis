@@ -1,19 +1,27 @@
 import React, { useState } from 'react';
 import { OrderBook, Trade } from '../types/crypto';
-import { BookOpen, Zap, ArrowDownUp, Shield } from 'lucide-react';
+import { formatCoinPrice, getBaseAssetFromSymbol } from '../utils/formatters';
+import { BookOpen, Zap } from 'lucide-react';
 
 interface OrderBookAndTradesProps {
   orderBook: OrderBook | null;
   trades: Trade[];
   currentPrice: number;
+  symbol?: string;
+  pricePrecision?: number;
 }
 
 export const OrderBookAndTrades: React.FC<OrderBookAndTradesProps> = ({
   orderBook,
   trades,
   currentPrice,
+  symbol = 'BTCUSDT',
+  pricePrecision,
 }) => {
   const [tab, setTab] = useState<'BOOK' | 'TRADES'>('BOOK');
+  const baseAsset = getBaseAssetFromSymbol(symbol);
+  const fPrice = (v: number) => formatCoinPrice(v, currentPrice || v, pricePrecision);
+  const qtyFixed = currentPrice >= 1000 ? 3 : currentPrice >= 10 ? 2 : 0;
 
   return (
     <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 shadow-2xl backdrop-blur-md flex flex-col h-full space-y-3 font-mono text-xs">
@@ -46,7 +54,7 @@ export const OrderBookAndTrades: React.FC<OrderBookAndTradesProps> = ({
 
         {tab === 'BOOK' && orderBook && (
           <span className="text-[10px] text-slate-400">
-            Spread: <span className="text-slate-200 font-bold">${orderBook.spread.toFixed(2)}</span> ({orderBook.spreadPercent.toFixed(3)}%)
+            Spread: <span className="text-slate-200 font-bold">${fPrice(orderBook.spread)}</span> ({orderBook.spreadPercent.toFixed(3)}%)
           </span>
         )}
       </div>
@@ -57,13 +65,13 @@ export const OrderBookAndTrades: React.FC<OrderBookAndTradesProps> = ({
           {/* Table headers */}
           <div className="grid grid-cols-3 text-[10px] text-slate-500 uppercase pb-1 border-b border-slate-800/60 font-semibold">
             <span>Price (USDT)</span>
-            <span className="text-right">Size (BTC)</span>
-            <span className="text-right">Total (BTC)</span>
+            <span className="text-right">Size ({baseAsset})</span>
+            <span className="text-right">Total ({baseAsset})</span>
           </div>
 
           {!orderBook ? (
             <div className="text-center py-10 text-slate-500 text-xs">
-              Streaming Binance live depth...
+              Streaming Binance Futures depth...
             </div>
           ) : (
             <>
@@ -75,9 +83,9 @@ export const OrderBookAndTrades: React.FC<OrderBookAndTradesProps> = ({
                       className="absolute right-0 top-0 bottom-0 bg-rose-500/10 pointer-events-none rounded-sm transition-all"
                       style={{ width: `${Math.min(100, ask.percent * 1.5)}%` }}
                     />
-                    <span className="text-rose-400 font-bold z-10">${ask.price.toFixed(2)}</span>
-                    <span className="text-right text-slate-300 z-10">{ask.quantity.toFixed(3)}</span>
-                    <span className="text-right text-slate-400 z-10">{ask.total.toFixed(3)}</span>
+                    <span className="text-rose-400 font-bold z-10">${fPrice(ask.price)}</span>
+                    <span className="text-right text-slate-300 z-10">{ask.quantity.toFixed(qtyFixed)}</span>
+                    <span className="text-right text-slate-400 z-10">{ask.total.toFixed(qtyFixed)}</span>
                   </div>
                 ))}
               </div>
@@ -86,7 +94,7 @@ export const OrderBookAndTrades: React.FC<OrderBookAndTradesProps> = ({
               <div className="my-1.5 py-1.5 px-2 bg-slate-950/80 rounded border border-slate-800 flex items-center justify-between">
                 <div className="flex items-center gap-1.5">
                   <span className="text-sm font-extrabold text-slate-100 font-mono">
-                    ${currentPrice.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    ${fPrice(currentPrice)}
                   </span>
                   <span className="text-[10px] text-slate-500">Market</span>
                 </div>
@@ -103,9 +111,9 @@ export const OrderBookAndTrades: React.FC<OrderBookAndTradesProps> = ({
                       className="absolute right-0 top-0 bottom-0 bg-emerald-500/10 pointer-events-none rounded-sm transition-all"
                       style={{ width: `${Math.min(100, bid.percent * 1.5)}%` }}
                     />
-                    <span className="text-emerald-400 font-bold z-10">${bid.price.toFixed(2)}</span>
-                    <span className="text-right text-slate-300 z-10">{bid.quantity.toFixed(3)}</span>
-                    <span className="text-right text-slate-400 z-10">{bid.total.toFixed(3)}</span>
+                    <span className="text-emerald-400 font-bold z-10">${fPrice(bid.price)}</span>
+                    <span className="text-right text-slate-300 z-10">{bid.quantity.toFixed(qtyFixed)}</span>
+                    <span className="text-right text-slate-400 z-10">{bid.total.toFixed(qtyFixed)}</span>
                   </div>
                 ))}
               </div>
@@ -119,14 +127,14 @@ export const OrderBookAndTrades: React.FC<OrderBookAndTradesProps> = ({
         <div className="flex flex-col flex-1 space-y-1 overflow-hidden">
           <div className="grid grid-cols-4 text-[10px] text-slate-500 uppercase pb-1 border-b border-slate-800/60 font-semibold">
             <span>Price (USDT)</span>
-            <span className="text-right">Qty (BTC)</span>
+            <span className="text-right">Qty ({baseAsset})</span>
             <span className="text-right">Total ($)</span>
             <span className="text-right">Time</span>
           </div>
 
           <div className="space-y-1 overflow-y-auto max-h-[300px]">
             {trades.slice(0, 15).map((t) => {
-              const isBuyerMaker = t.isBuyerMaker; // true = seller market sell, false = buyer market buy
+              const isBuyerMaker = t.isBuyerMaker;
               const isBuy = !isBuyerMaker;
 
               return (
@@ -135,9 +143,9 @@ export const OrderBookAndTrades: React.FC<OrderBookAndTradesProps> = ({
                   className="grid grid-cols-4 py-0.5 text-[11px] hover:bg-slate-800/30 rounded px-1 transition-colors"
                 >
                   <span className={`font-bold ${isBuy ? 'text-emerald-400' : 'text-rose-400'}`}>
-                    ${t.price.toFixed(2)}
+                    ${fPrice(t.price)}
                   </span>
-                  <span className="text-right text-slate-200">{t.qty.toFixed(4)}</span>
+                  <span className="text-right text-slate-200">{t.qty.toFixed(qtyFixed)}</span>
                   <span className="text-right text-slate-400">${(t.price * t.qty).toFixed(0)}</span>
                   <span className="text-right text-slate-500 text-[10px]">
                     {new Date(t.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}

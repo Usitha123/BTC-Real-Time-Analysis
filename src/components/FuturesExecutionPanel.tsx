@@ -7,20 +7,17 @@ import {
   Candle,
 } from '../types/crypto';
 import {
+  formatCoinPrice,
+  roundToPricePrecision,
+  getBaseAssetFromSymbol,
+  getPriceDecimals,
+} from '../utils/formatters';
+import {
   Crosshair,
-  TrendingUp,
-  TrendingDown,
-  Minus,
-  ShieldAlert,
   AlertTriangle,
-  ArrowRight,
   DollarSign,
-  Percent,
   CheckCircle2,
   Clock,
-  Layers,
-  Sliders,
-  HelpCircle,
   Copy,
   Check,
   History,
@@ -37,6 +34,8 @@ interface FuturesExecutionPanelProps {
   activeTimeframe: PredictionTimeframe;
   onSelectTimeframe: (tf: PredictionTimeframe) => void;
   candles?: Candle[];
+  symbol?: string;
+  pricePrecision?: number;
 }
 
 interface HistoricalBidRecord {
@@ -64,22 +63,25 @@ export const FuturesExecutionPanel: React.FC<FuturesExecutionPanelProps> = ({
   prediction,
   currentPrice,
   indicators,
-  multiTfSignals,
   activeTimeframe,
   onSelectTimeframe,
   candles = [],
+  symbol = 'BTCUSDT',
+  pricePrecision,
 }) => {
   const [accountBalance, setAccountBalance] = useState<number>(2000);
   const [riskPercent, setRiskPercent] = useState<number>(1.5);
   const [copied, setCopied] = useState<boolean>(false);
   const [viewTab, setViewTab] = useState<'EXACT_LIVE' | 'HISTORICAL_AUDIT'>('EXACT_LIVE');
 
-  // Live seconds ticker for exact candle countdown
   const [currentTime, setCurrentTime] = useState<Date>(new Date());
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
+
+  const baseAsset = getBaseAssetFromSymbol(symbol);
+  const decimals = getPriceDecimals(currentPrice || candles[candles.length - 1]?.close || 100, pricePrecision);
 
   // Compute Historical Backtested Bid Records unconditionally at top level
   const historicalBids = useMemo<HistoricalBidRecord[]>(() => {
@@ -89,26 +91,23 @@ export const FuturesExecutionPanel: React.FC<FuturesExecutionPanelProps> = ({
     const horizonMinutes = Math.round(durationMsMap[activeTimeframe] / (60 * 1000));
     const step = Math.max(5, Math.floor(candles.length / 18));
 
-    // Walk backwards through previous historical candles
     for (let i = candles.length - 15; i >= 20; i -= step) {
       const c = candles[i];
       const prevC = candles[i - 1];
       const futureIdx = Math.min(candles.length - 1, i + horizonMinutes);
       const futureC = candles[futureIdx];
 
-      // Exact previous bid price anchored to candle low wick / open
-      const bidVal = parseFloat(((c.open + c.low) / 2).toFixed(2));
-      const exitVal = parseFloat(futureC.close.toFixed(2));
-      const delta = parseFloat((exitVal - bidVal).toFixed(2));
+      const bidVal = roundToPricePrecision((c.open + c.low) / 2, c.close, decimals);
+      const exitVal = roundToPricePrecision(futureC.close, c.close, decimals);
+      const delta = roundToPricePrecision(exitVal - bidVal, c.close, decimals);
       const pct = parseFloat(((delta / bidVal) * 100).toFixed(3));
 
-      // Trigger condition explanation
       const wasBull = c.close >= prevC.close;
       let triggerText = wasBull ? 'EMA 20 Wick Retest' : 'RSI Mean-Reversion Dip';
       if (c.volume > prevC.volume * 1.3) triggerText = 'High Volume Absorption';
 
-      const isProfit = delta > 0.02;
-      const isBreakeven = Math.abs(delta) <= 0.02;
+      const isProfit = pct > 0.02;
+      const isBreakeven = Math.abs(pct) <= 0.02;
 
       records.push({
         id: `hist-bid-${c.time}`,
@@ -126,7 +125,7 @@ export const FuturesExecutionPanel: React.FC<FuturesExecutionPanelProps> = ({
     }
 
     return records;
-  }, [candles, activeTimeframe]);
+  }, [candles, activeTimeframe, decimals]);
 
   if (!prediction || currentPrice === 0) {
     return (
@@ -138,86 +137,70 @@ export const FuturesExecutionPanel: React.FC<FuturesExecutionPanelProps> = ({
 
   const isBull = prediction.direction === 'UP';
   const isBear = prediction.direction === 'DOWN';
+  const rp = (v: number) => roundToPricePrecision(v, currentPrice, decimals);
+  const fPrice = (v: number) => formatCoinPrice(v, currentPrice, decimals);
 
   // ATR for volatility buffer
-  const atr = indicators?.atr || Math.max(50, currentPrice * 0.003);
+  const atr = indicators?.atr || currentPrice * 0.003;
 
   // Dynamic Futures Setup Calculations
-  let setupBias: 'LONG' | 'SHORT' | 'STANDBY';
   let exactBidPrice: number;
-  let entryPriceLow: number;
-  let entryPriceHigh: number;
   let takeProfit1: number;
   let takeProfit2: number;
   let stopLoss: number;
   let riskRewardRatio: number;
-  let maxSafeLeverage: number;
 
   if (isBull) {
-    setupBias = 'LONG';
-    // Exact bid price calculated from 20 EMA pullback and lower wick confluence
-    exactBidPrice = parseFloat((indicators?.ema9 ? Math.min(currentPrice * 0.9992, (indicators.ema9 + currentPrice) / 2) : currentPrice * 0.999).toFixed(2));
-    entryPriceLow = parseFloat((exactBidPrice - atr * 0.15).toFixed(2));
-    entryPriceHigh = parseFloat((exactBidPrice + atr * 0.1).toFixed(2));
-    takeProfit1 = parseFloat(Math.max(prediction.predictedPrice, currentPrice + atr * 0.8).toFixed(2));
-    takeProfit2 = parseFloat((prediction.expectedRange[1]).toFixed(2));
-    stopLoss = parseFloat(Math.min(prediction.expectedRange[0], exactBidPrice - atr * 0.9).toFixed(2));
+    exactBidPrice = rp(indicators?.ema9 ? Math.min(currentPrice * 0.9992, (indicators.ema9 + currentPrice) / 2) : currentPrice * 0.999);
+    takeProfit1 = rp(Math.max(prediction.predictedPrice, currentPrice + atr * 0.8));
+    takeProfit2 = rp(prediction.expectedRange[1]);
+    stopLoss = rp(Math.min(prediction.expectedRange[0], exactBidPrice - atr * 0.9));
     const potentialGain = takeProfit1 - exactBidPrice;
     const potentialLoss = exactBidPrice - stopLoss;
     riskRewardRatio = potentialLoss > 0 ? parseFloat((potentialGain / potentialLoss).toFixed(2)) : 2.0;
   } else if (isBear) {
-    setupBias = 'SHORT';
-    exactBidPrice = parseFloat((indicators?.ema9 ? Math.max(currentPrice * 1.0008, (indicators.ema9 + currentPrice) / 2) : currentPrice * 1.001).toFixed(2));
-    entryPriceLow = parseFloat((exactBidPrice - atr * 0.1).toFixed(2));
-    entryPriceHigh = parseFloat((exactBidPrice + atr * 0.15).toFixed(2));
-    takeProfit1 = parseFloat(Math.min(prediction.predictedPrice, currentPrice - atr * 0.8).toFixed(2));
-    takeProfit2 = parseFloat((prediction.expectedRange[0]).toFixed(2));
-    stopLoss = parseFloat(Math.max(prediction.expectedRange[1], exactBidPrice + atr * 0.9).toFixed(2));
+    exactBidPrice = rp(indicators?.ema9 ? Math.max(currentPrice * 1.0008, (indicators.ema9 + currentPrice) / 2) : currentPrice * 1.001);
+    takeProfit1 = rp(Math.min(prediction.predictedPrice, currentPrice - atr * 0.8));
+    takeProfit2 = rp(prediction.expectedRange[0]);
+    stopLoss = rp(Math.max(prediction.expectedRange[1], exactBidPrice + atr * 0.9));
     const potentialGain = exactBidPrice - takeProfit1;
     const potentialLoss = stopLoss - exactBidPrice;
     riskRewardRatio = potentialLoss > 0 ? parseFloat((potentialGain / potentialLoss).toFixed(2)) : 2.0;
   } else {
-    setupBias = 'STANDBY';
-    exactBidPrice = parseFloat(currentPrice.toFixed(2));
-    entryPriceLow = parseFloat((currentPrice * 0.998).toFixed(2));
-    entryPriceHigh = parseFloat((currentPrice * 1.002).toFixed(2));
-    takeProfit1 = parseFloat((currentPrice * 1.004).toFixed(2));
-    takeProfit2 = parseFloat((currentPrice * 1.008).toFixed(2));
-    stopLoss = parseFloat((currentPrice * 0.994).toFixed(2));
+    exactBidPrice = rp(currentPrice);
+    takeProfit1 = rp(currentPrice * 1.004);
+    takeProfit2 = rp(currentPrice * 1.008);
+    stopLoss = rp(currentPrice * 0.994);
     riskRewardRatio = 1.0;
   }
 
-  // Safe leverage calculation based on ATR %:
   const atrPct = (atr / currentPrice) * 100;
-  maxSafeLeverage = Math.max(3, Math.min(20, Math.floor(25 / (atrPct * 1.8))));
+  const maxSafeLeverage = Math.max(3, Math.min(20, Math.floor(25 / (atrPct * 1.8))));
 
-  // Timing Calculations
   const currentSeconds = currentTime.getSeconds();
   const secondsRemainingInMinute = 60 - currentSeconds;
-  
-  // Exact Target Execution Time (e.g. Next Minute candle open)
+
   const nextExecutionTime = new Date(currentTime.getTime() + secondsRemainingInMinute * 1000);
   const formattedNextExecutionTime = nextExecutionTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
   const exactExitTime = new Date(nextExecutionTime.getTime() + durationMsMap[activeTimeframe]);
   const formattedExactExitTime = exactExitTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
-  // Position Sizing & Margin Math
   const dollarRiskAmount = (accountBalance * riskPercent) / 100;
   const slDistanceDollar = Math.abs(exactBidPrice - stopLoss);
-  const positionSizeBtc = slDistanceDollar > 0 ? parseFloat((dollarRiskAmount / slDistanceDollar).toFixed(4)) : 0.01;
-  const notionalPositionValue = parseFloat((positionSizeBtc * exactBidPrice).toFixed(2));
+  const qtyDecimals = currentPrice >= 1000 ? 4 : currentPrice >= 10 ? 2 : 0;
+  const positionSizeQty = slDistanceDollar > 0 ? parseFloat((dollarRiskAmount / slDistanceDollar).toFixed(qtyDecimals)) : 0;
+  const notionalPositionValue = parseFloat((positionSizeQty * exactBidPrice).toFixed(2));
   const requiredMargin = parseFloat((notionalPositionValue / maxSafeLeverage).toFixed(2));
 
-  // Copy order setup to clipboard
   const handleCopySetup = () => {
-    const text = `BTC/USDT Exact Futures Trade Order (${prediction.timeframe} Window)
-Exact Take-Bid Price: $${exactBidPrice}
+    const text = `${baseAsset}/USDT Exact Futures Trade Order (${prediction.timeframe} Window)
+Exact Take-Bid Price: $${fPrice(exactBidPrice)}
 Execution Trigger Time: ${formattedNextExecutionTime} (in ${secondsRemainingInMinute}s)
 Expected Exit Time: ${formattedExactExitTime}
-Take-Profit (TP1): $${takeProfit1}
-Take-Profit (TP2): $${takeProfit2}
-Stop-Loss (SL): $${stopLoss}
+Take-Profit (TP1): $${fPrice(takeProfit1)}
+Take-Profit (TP2): $${fPrice(takeProfit2)}
+Stop-Loss (SL): $${fPrice(stopLoss)}
 Risk/Reward Ratio: 1 : ${riskRewardRatio}
 Recommended Max Leverage: ${maxSafeLeverage}x
 Order Type: Post-Only Limit Order`;
@@ -311,10 +294,10 @@ Order Type: Post-Only Limit Order`;
 
               <div className="my-2.5">
                 <div className="text-2xl sm:text-3xl font-black text-amber-300 tracking-tight">
-                  ${exactBidPrice.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  ${fPrice(exactBidPrice)}
                 </div>
                 <div className="text-[11px] text-slate-400 mt-1">
-                  Current Market: <span className="text-slate-200 font-bold">${currentPrice.toFixed(2)}</span>
+                  Current Market: <span className="text-slate-200 font-bold">${fPrice(currentPrice)}</span>
                 </div>
               </div>
 
@@ -336,7 +319,6 @@ Order Type: Post-Only Limit Order`;
                   {formattedNextExecutionTime}
                 </div>
                 <div className="text-[11px] text-slate-400 mt-1 flex items-center gap-1.5">
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
                   <span>Countdown: </span>
                   <span className="font-bold text-emerald-400">{secondsRemainingInMinute}s until candle close</span>
                 </div>
@@ -358,15 +340,15 @@ Order Type: Post-Only Limit Order`;
               <div className="my-2.5 space-y-1">
                 <div className="flex items-center justify-between text-xs">
                   <span className="text-slate-400">Take-Profit 1:</span>
-                  <span className="font-bold text-emerald-400">${takeProfit1.toLocaleString()}</span>
+                  <span className="font-bold text-emerald-400">${fPrice(takeProfit1)}</span>
                 </div>
                 <div className="flex items-center justify-between text-xs">
                   <span className="text-slate-400">Take-Profit 2:</span>
-                  <span className="font-bold text-teal-300">${takeProfit2.toLocaleString()}</span>
+                  <span className="font-bold text-teal-300">${fPrice(takeProfit2)}</span>
                 </div>
                 <div className="flex items-center justify-between text-xs">
                   <span className="text-slate-400">Stop-Loss (SL):</span>
-                  <span className="font-bold text-rose-400">${stopLoss.toLocaleString()}</span>
+                  <span className="font-bold text-rose-400">${fPrice(stopLoss)}</span>
                 </div>
               </div>
 
@@ -384,7 +366,7 @@ Order Type: Post-Only Limit Order`;
                 EVIDENCE
               </span>
               <span>
-                Exact bid price is anchored to the <strong>20 EMA dynamic mean ($${indicators?.ema20.toFixed(1) || currentPrice})</strong> and previous lower-wick volume clusters.
+                Exact bid price is anchored to the <strong>20 EMA dynamic mean (${fPrice(indicators?.ema20 || currentPrice)})</strong> and previous lower-wick volume clusters.
               </span>
             </div>
 
@@ -403,11 +385,11 @@ Order Type: Post-Only Limit Order`;
               <div className="flex items-center gap-2">
                 <DollarSign className="w-3.5 h-3.5 text-emerald-400" />
                 <span className="font-bold text-slate-200 uppercase">
-                  Futures Sizing at Exact Bid ($${exactBidPrice})
+                  Futures Sizing at Exact Bid (${fPrice(exactBidPrice)})
                 </span>
               </div>
               <span className="text-[10px] text-slate-400">
-                Leverage Capped at {maxSafeLeverage}x (ATR: ${atr.toFixed(0)})
+                Leverage Capped at {maxSafeLeverage}x (ATR: ${fPrice(atr)})
               </span>
             </div>
 
@@ -446,7 +428,7 @@ Order Type: Post-Only Limit Order`;
                 <div className="text-sm font-extrabold text-rose-400 mt-0.5">
                   ${dollarRiskAmount.toFixed(2)} ({riskPercent}%)
                 </div>
-                <span className="text-[9px] text-slate-500">Position: {positionSizeBtc} BTC</span>
+                <span className="text-[9px] text-slate-500">Position: {positionSizeQty} {baseAsset}</span>
               </div>
 
               <div className="bg-slate-900 p-2.5 rounded border border-slate-800">
@@ -504,10 +486,10 @@ Order Type: Post-Only Limit Order`;
                     return (
                       <tr key={row.id} className="hover:bg-slate-800/40 transition-colors">
                         <td className="py-2 px-3 text-slate-300 font-bold whitespace-nowrap">{row.entryTime}</td>
-                        <td className="py-2 px-3 text-amber-300 font-bold whitespace-nowrap">${row.exactBidPrice.toFixed(2)}</td>
+                        <td className="py-2 px-3 text-amber-300 font-bold whitespace-nowrap">${fPrice(row.exactBidPrice)}</td>
                         <td className="py-2 px-3 text-slate-400 text-[11px] whitespace-nowrap">{row.triggerReason}</td>
                         <td className="py-2 px-3 text-slate-400 whitespace-nowrap">{row.exitTime}</td>
-                        <td className="py-2 px-3 text-slate-200 font-bold whitespace-nowrap">${row.exitPrice.toFixed(2)}</td>
+                        <td className="py-2 px-3 text-slate-200 font-bold whitespace-nowrap">${fPrice(row.exitPrice)}</td>
                         <td className="py-2 px-3 whitespace-nowrap">
                           <span
                             className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded border ${
@@ -523,7 +505,7 @@ Order Type: Post-Only Limit Order`;
                           </span>
                         </td>
                         <td className={`py-2 px-3 font-bold whitespace-nowrap ${row.priceDelta >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                          {row.priceDelta >= 0 ? '+' : ''}${row.priceDelta.toFixed(2)} ({row.pctDelta >= 0 ? '+' : ''}{row.pctDelta}%)
+                          {row.priceDelta >= 0 ? '+' : ''}${fPrice(row.priceDelta)} ({row.pctDelta >= 0 ? '+' : ''}{row.pctDelta}%)
                         </td>
                       </tr>
                     );
