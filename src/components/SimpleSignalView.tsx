@@ -305,14 +305,14 @@ Criteria: ${signal.bullishCount} Bullish / ${signal.bearishCount} Bearish / ${si
   return (
     <div className="space-y-6">
       {/* Holding Timeframe Bar */}
-      <section className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-5 py-3.5">
-        <div className="flex flex-wrap items-center gap-3">
+      <section className="flex flex-col md:flex-row md:items-center justify-between gap-3 sm:gap-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-4 sm:px-5 py-3.5">
+        <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-2.5 sm:gap-3 w-full md:w-auto">
           <span className="text-xs font-semibold text-slate-700 dark:text-slate-200 flex items-center gap-1.5 whitespace-nowrap shrink-0">
             <Clock className="w-3.5 h-3.5 text-amber-500" />
             <span>Trade Duration</span>
           </span>
 
-          <div className="inline-flex flex-wrap items-center p-1 rounded-lg bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 gap-1">
+          <div className="grid grid-cols-5 sm:inline-flex items-center p-1 rounded-lg bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 gap-1 w-full sm:w-auto">
             {TRADE_HORIZONS.map((h) => {
               const cfg = HORIZON_CONFIG[h];
               const active = activeHorizon === h;
@@ -320,7 +320,7 @@ Criteria: ${signal.bullishCount} Bullish / ${signal.bearishCount} Bearish / ${si
                 <button
                   key={h}
                   onClick={() => onSelectHorizon(h)}
-                  className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                  className={`px-1.5 sm:px-3 py-2 sm:py-1.5 rounded-md text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer text-center ${
                     active
                       ? 'bg-slate-900 dark:bg-amber-500 text-white dark:text-slate-950 shadow-sm'
                       : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
@@ -333,7 +333,7 @@ Criteria: ${signal.bullishCount} Bullish / ${signal.bearishCount} Bearish / ${si
           </div>
         </div>
 
-        <div className="text-xs font-mono tabular-nums text-slate-500 dark:text-slate-400">
+        <div className="text-[11px] sm:text-xs font-mono tabular-nums text-slate-500 dark:text-slate-400">
           Locked on {signal.timeframe} close ({closedCandleLabel}) · Exit window {targetExitTime}
         </div>
       </section>
@@ -452,8 +452,8 @@ Criteria: ${signal.bullishCount} Bullish / ${signal.bearishCount} Bearish / ${si
               </div>
             </div>
 
-            <div className="flex flex-wrap items-center gap-4">
-              <div className="text-right font-mono tabular-nums">
+            <div className="flex flex-wrap items-center justify-between sm:justify-end gap-3 sm:gap-4">
+              <div className="text-left sm:text-right font-mono tabular-nums">
                 <span className={`text-xs font-bold block ${lockedStatusColor}`}>
                   {lockedStatusText}
                 </span>
@@ -483,7 +483,7 @@ Criteria: ${signal.bullishCount} Bullish / ${signal.bearishCount} Bearish / ${si
       )}
 
       {/* Primary Stable Trade Setup Card */}
-      <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 space-y-6">
+      <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 sm:p-6 space-y-5 sm:space-y-6">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-5 pb-6 border-b border-slate-200 dark:border-slate-800">
           <div className="space-y-2 max-w-2xl">
             <div className="flex flex-wrap items-center gap-2 text-xs font-medium text-slate-500 dark:text-slate-400 tabular-nums">
@@ -515,10 +515,10 @@ Criteria: ${signal.bullishCount} Bullish / ${signal.bearishCount} Bearish / ${si
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+          <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2 sm:gap-2.5 w-full lg:w-auto shrink-0">
             <button
               onClick={handleLockTradeNow}
-              className="px-4 py-2 rounded-lg text-xs font-semibold bg-amber-500 hover:bg-amber-400 text-slate-950 transition-colors inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
+              className="col-span-2 sm:col-span-1 justify-center px-4 py-2.5 sm:py-2 rounded-lg text-xs font-semibold bg-amber-500 hover:bg-amber-400 text-slate-950 transition-colors inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
             >
               <Lock className="w-3.5 h-3.5" />
               <span>Lock {HORIZON_CONFIG[activeHorizon].shortLabel} Trade ({leverage}x)</span>
@@ -526,7 +526,7 @@ Criteria: ${signal.bullishCount} Bullish / ${signal.bearishCount} Bearish / ${si
 
             <button
               onClick={handleCopyLevels}
-              className="px-4 py-2 rounded-lg text-xs font-semibold border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
+              className="justify-center px-4 py-2.5 sm:py-2 rounded-lg text-xs font-semibold border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
             >
               {copied ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
               <span>{copied ? 'Copied' : 'Copy Order'}</span>
@@ -534,7 +534,7 @@ Criteria: ${signal.bullishCount} Bullish / ${signal.bearishCount} Bearish / ${si
 
             <button
               onClick={onSwitchToPro}
-              className="px-4 py-2 rounded-lg text-xs font-semibold bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 hover:opacity-90 transition-opacity whitespace-nowrap shrink-0 cursor-pointer"
+              className="justify-center px-4 py-2.5 sm:py-2 rounded-lg text-xs font-semibold bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 hover:opacity-90 transition-opacity whitespace-nowrap shrink-0 cursor-pointer"
             >
               Full Terminal
             </button>
@@ -542,55 +542,55 @@ Criteria: ${signal.bullishCount} Bullish / ${signal.bearishCount} Bearish / ${si
         </div>
 
         {/* Core 4 Price Columns */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-6">
-          <div>
-            <span className="text-xs font-medium text-slate-500 dark:text-slate-400 block">
-              Stable Entry Price ({signal.timeframe} close)
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
+          <div className="min-w-0">
+            <span className="text-[11px] sm:text-xs font-medium text-slate-500 dark:text-slate-400 block">
+              Stable Entry ({signal.timeframe} close)
             </span>
-            <span className="text-2xl font-bold font-mono tabular-nums text-slate-900 dark:text-slate-100 mt-1 block">
+            <span className="text-lg sm:text-2xl font-bold font-mono tabular-nums text-slate-900 dark:text-slate-100 mt-1 block break-words">
               ${fPrice(signal.entryPrice)}
             </span>
-            <span className="text-xs font-mono tabular-nums text-slate-500 dark:text-slate-400 mt-1 block">
+            <span className="text-[11px] sm:text-xs font-mono tabular-nums text-slate-500 dark:text-slate-400 mt-1 block">
               {liveInZone
-                ? `Live price inside Entry Zone ($${fCompact(signal.entryZone[0])}–$${fCompact(signal.entryZone[1])})`
+                ? `In Entry Zone ($${fCompact(signal.entryZone[0])}–$${fCompact(signal.entryZone[1])})`
                 : `Live ${liveDiffFromEntry >= 0 ? '+' : ''}$${fCompact(Math.abs(liveDiffFromEntry))} vs Entry`}
             </span>
           </div>
 
-          <div>
-            <span className="text-xs font-medium text-slate-500 dark:text-slate-400 block">
+          <div className="min-w-0">
+            <span className="text-[11px] sm:text-xs font-medium text-slate-500 dark:text-slate-400 block">
               Take Profit 1 & 2 ({leverage}x ROE)
             </span>
-            <span className="text-2xl font-bold font-mono tabular-nums text-emerald-600 dark:text-emerald-400 mt-1 block">
+            <span className="text-lg sm:text-2xl font-bold font-mono tabular-nums text-emerald-600 dark:text-emerald-400 mt-1 block break-words">
               ${fPrice(signal.takeProfit1)}
             </span>
-            <span className="text-xs font-mono tabular-nums text-emerald-600/85 dark:text-emerald-400/85 mt-1 inline-flex items-center gap-1">
-              <ArrowUpRight className="w-3.5 h-3.5" />
-              +{roeTp1Pct.toFixed(1)}% ROE · TP2 ${fCompact(signal.takeProfit2)} (+{roeTp2Pct.toFixed(1)}% ROE)
+            <span className="text-[11px] sm:text-xs font-mono tabular-nums text-emerald-600/85 dark:text-emerald-400/85 mt-1 inline-flex items-center gap-1 flex-wrap">
+              <ArrowUpRight className="w-3.5 h-3.5 shrink-0" />
+              +{roeTp1Pct.toFixed(1)}% ROE · TP2 ${fCompact(signal.takeProfit2)}
             </span>
           </div>
 
-          <div>
-            <span className="text-xs font-medium text-slate-500 dark:text-slate-400 block">
+          <div className="min-w-0">
+            <span className="text-[11px] sm:text-xs font-medium text-slate-500 dark:text-slate-400 block">
               Stop Loss ({leverage}x Risk)
             </span>
-            <span className="text-2xl font-bold font-mono tabular-nums text-rose-600 dark:text-rose-400 mt-1 block">
+            <span className="text-lg sm:text-2xl font-bold font-mono tabular-nums text-rose-600 dark:text-rose-400 mt-1 block break-words">
               ${fPrice(signal.stopLoss)}
             </span>
-            <span className="text-xs font-mono tabular-nums text-rose-600/85 dark:text-rose-400/85 mt-1 inline-flex items-center gap-1">
-              <ArrowDownRight className="w-3.5 h-3.5" />
+            <span className="text-[11px] sm:text-xs font-mono tabular-nums text-rose-600/85 dark:text-rose-400/85 mt-1 inline-flex items-center gap-1 flex-wrap">
+              <ArrowDownRight className="w-3.5 h-3.5 shrink-0" />
               {signal.slPct}% spot ({roeSlPct.toFixed(1)}% ROE)
             </span>
           </div>
 
-          <div>
-            <span className="text-xs font-medium text-slate-500 dark:text-slate-400 block">
+          <div className="min-w-0">
+            <span className="text-[11px] sm:text-xs font-medium text-slate-500 dark:text-slate-400 block">
               Risk / Reward & {HORIZON_CONFIG[activeHorizon].shortLabel} Backtest
             </span>
-            <span className={`text-2xl font-bold font-mono tabular-nums mt-1 block ${actionText}`}>
+            <span className={`text-lg sm:text-2xl font-bold font-mono tabular-nums mt-1 block ${actionText}`}>
               1 : {signal.riskRewardRatio}
             </span>
-            <span className="text-xs font-mono tabular-nums text-slate-500 dark:text-slate-400 mt-1 block">
+            <span className="text-[11px] sm:text-xs font-mono tabular-nums text-slate-500 dark:text-slate-400 mt-1 block">
               {signal.backtestTrades > 0
                 ? `${signal.backtestWinRate}% historical win (${signal.backtestTrades} ${HORIZON_CONFIG[activeHorizon].shortLabel} trades)`
                 : `${signal.confidenceScore}% model confidence`}
@@ -626,7 +626,7 @@ Criteria: ${signal.bullishCount} Bullish / ${signal.bearishCount} Bearish / ${si
       </section>
 
       {/* Leverage & Futures Risk Control Panel */}
-      <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 space-y-5">
+      <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 sm:p-6 space-y-5">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-5 border-b border-slate-200 dark:border-slate-800">
           <div>
             <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
@@ -637,7 +637,7 @@ Criteria: ${signal.bullishCount} Bullish / ${signal.bearishCount} Bearish / ${si
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2 sm:gap-3">
             {/* Margin Mode Segmented Toggle */}
             <div className="inline-flex items-center p-1 rounded-lg bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
               {(['Isolated', 'Cross'] as const).map((mode) => (
@@ -656,7 +656,7 @@ Criteria: ${signal.bullishCount} Bullish / ${signal.bearishCount} Bearish / ${si
             </div>
 
             {/* Leverage Quick Presets */}
-            <div className="inline-flex flex-wrap items-center gap-1 p-1 rounded-lg bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+            <div className="flex flex-wrap items-center gap-1 p-1 rounded-lg bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 w-full sm:w-auto">
               {[3, 5, 10, 15, 20].map((lev) => (
                 <button
                   key={lev}
@@ -674,7 +674,7 @@ Criteria: ${signal.bullishCount} Bullish / ${signal.bearishCount} Bearish / ${si
                 onClick={() => setLeverage(signal.recommendedLeverage)}
                 className="px-2.5 py-1 rounded-md text-xs font-semibold text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/10 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
               >
-                Use Safe ({signal.recommendedLeverage}x)
+                Safe ({signal.recommendedLeverage}x)
               </button>
             </div>
           </div>
@@ -1062,7 +1062,7 @@ Criteria: ${signal.bullishCount} Bullish / ${signal.bearishCount} Bearish / ${si
                   min="10"
                   value={accountEquity}
                   onChange={(e) => setAccountEquity(Math.max(10, parseFloat(e.target.value) || 0))}
-                  className="w-full px-2.5 py-1.5 text-xs font-mono tabular-nums rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 focus:outline-none focus:border-amber-500"
+                  className="w-full px-2.5 py-2 sm:py-1.5 text-base sm:text-xs font-mono tabular-nums rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 focus:outline-none focus:border-amber-500"
                 />
               </div>
 
@@ -1077,7 +1077,7 @@ Criteria: ${signal.bullishCount} Bullish / ${signal.bearishCount} Bearish / ${si
                   step="0.25"
                   value={riskPct}
                   onChange={(e) => setRiskPct(Math.max(0.1, parseFloat(e.target.value) || 1))}
-                  className="w-full px-2.5 py-1.5 text-xs font-mono tabular-nums rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 focus:outline-none focus:border-amber-500"
+                  className="w-full px-2.5 py-2 sm:py-1.5 text-base sm:text-xs font-mono tabular-nums rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 focus:outline-none focus:border-amber-500"
                 />
               </div>
 

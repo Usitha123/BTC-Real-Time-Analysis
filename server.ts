@@ -1,5 +1,4 @@
 import express from 'express';
-import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI, Type, ThinkingLevel } from '@google/genai';
 import path from 'path';
 import dotenv from 'dotenv';
@@ -46,7 +45,7 @@ app.get('/api/health', (_req, res) => {
   });
 });
 
-// Proxy for Binance USD-M Futures REST API (supports all 500+ perpetual trading pairs, with Spot fallback)
+// Proxy for Binance USD-M Futures REST API (supports all 500+ perpetual pairs, with Spot & Vision fallbacks)
 app.get('/api/binance/klines', async (req, res) => {
   try {
     const symbol = ((req.query.symbol as string) || 'BTCUSDT').toUpperCase();
@@ -59,6 +58,12 @@ app.get('/api/binance/klines', async (req, res) => {
     if (!response.ok) {
       response = await fetch(
         `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`,
+        { headers: { 'User-Agent': 'Crypto-Signal-Desk' } }
+      );
+    }
+    if (!response.ok) {
+      response = await fetch(
+        `https://data-api.binance.vision/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`,
         { headers: { 'User-Agent': 'Crypto-Signal-Desk' } }
       );
     }
@@ -80,6 +85,9 @@ app.get('/api/binance/ticker', async (req, res) => {
       response = await fetch(`https://api.binance.com/api/v3/ticker/24hr?symbol=${symbol}`);
     }
     if (!response.ok) {
+      response = await fetch(`https://data-api.binance.vision/api/v3/ticker/24hr?symbol=${symbol}`);
+    }
+    if (!response.ok) {
       return res.status(response.status).json({ error: `Binance ticker error` });
     }
     const data = await response.json();
@@ -98,6 +106,9 @@ app.get('/api/binance/depth', async (req, res) => {
       response = await fetch(`https://api.binance.com/api/v3/depth?symbol=${symbol}&limit=${limit}`);
     }
     if (!response.ok) {
+      response = await fetch(`https://data-api.binance.vision/api/v3/depth?symbol=${symbol}&limit=${limit}`);
+    }
+    if (!response.ok) {
       return res.status(response.status).json({ error: `Binance depth error` });
     }
     const data = await response.json();
@@ -114,6 +125,9 @@ app.get('/api/binance/trades', async (req, res) => {
     let response = await fetch(`https://fapi.binance.com/fapi/v1/trades?symbol=${symbol}&limit=${limit}`);
     if (!response.ok) {
       response = await fetch(`https://api.binance.com/api/v3/trades?symbol=${symbol}&limit=${limit}`);
+    }
+    if (!response.ok) {
+      response = await fetch(`https://data-api.binance.vision/api/v3/trades?symbol=${symbol}&limit=${limit}`);
     }
     if (!response.ok) {
       return res.status(response.status).json({ error: `Binance trades error` });
@@ -174,41 +188,84 @@ async function getFuturesSymbolsList(): Promise<FuturesSymbolInfo[]> {
     fetchJsonWithTimeout('https://fapi.binance.com/fapi/v1/ticker/24hr', 6000),
   ]);
 
-  if (!infoJson || !Array.isArray(infoJson.symbols)) {
-    throw new Error('Unable to load Binance Futures exchange symbols');
-  }
+  if (infoJson && Array.isArray(infoJson.symbols)) {
+    const tickerMap = new Map<string, any>();
+    if (Array.isArray(tickersJson)) {
+      for (const t of tickersJson) {
+        if (t && t.symbol) tickerMap.set(t.symbol, t);
+      }
+    }
 
-  const tickerMap = new Map<string, any>();
-  if (Array.isArray(tickersJson)) {
-    for (const t of tickersJson) {
-      if (t && t.symbol) tickerMap.set(t.symbol, t);
+    const pairs: FuturesSymbolInfo[] = infoJson.symbols
+      .filter(
+        (s: any) =>
+          s.contractType === 'PERPETUAL' &&
+          s.status === 'TRADING' &&
+          s.quoteAsset === 'USDT'
+      )
+      .map((s: any) => {
+        const t = tickerMap.get(s.symbol);
+        return {
+          symbol: s.symbol,
+          baseAsset: s.baseAsset,
+          quoteAsset: s.quoteAsset,
+          pricePrecision: typeof s.pricePrecision === 'number' ? s.pricePrecision : 2,
+          quantityPrecision: typeof s.quantityPrecision === 'number' ? s.quantityPrecision : 3,
+          lastPrice: t ? parseFloat(t.lastPrice || '0') : 0,
+          priceChangePercent: t ? parseFloat(t.priceChangePercent || '0') : 0,
+          quoteVolume: t ? parseFloat(t.quoteVolume || '0') : 0,
+        };
+      })
+      .sort((a: FuturesSymbolInfo, b: FuturesSymbolInfo) => b.quoteVolume - a.quoteVolume);
+
+    if (pairs.length > 0) {
+      cachedFuturesSymbols = { timestamp: now, data: pairs };
+      return pairs;
     }
   }
 
-  const pairs: FuturesSymbolInfo[] = infoJson.symbols
-    .filter(
-      (s: any) =>
-        s.contractType === 'PERPETUAL' &&
-        s.status === 'TRADING' &&
-        s.quoteAsset === 'USDT'
-    )
-    .map((s: any) => {
-      const t = tickerMap.get(s.symbol);
-      return {
-        symbol: s.symbol,
-        baseAsset: s.baseAsset,
-        quoteAsset: s.quoteAsset,
-        pricePrecision: typeof s.pricePrecision === 'number' ? s.pricePrecision : 2,
-        quantityPrecision: typeof s.quantityPrecision === 'number' ? s.quantityPrecision : 3,
-        lastPrice: t ? parseFloat(t.lastPrice || '0') : 0,
-        priceChangePercent: t ? parseFloat(t.priceChangePercent || '0') : 0,
-        quoteVolume: t ? parseFloat(t.quoteVolume || '0') : 0,
-      };
-    })
-    .sort((a: FuturesSymbolInfo, b: FuturesSymbolInfo) => b.quoteVolume - a.quoteVolume);
+  // Fallback to globally accessible Binance Data Vision mirror (prevents 451 region block on US hosting)
+  const visionTickers = await fetchJsonWithTimeout('https://data-api.binance.vision/api/v3/ticker/24hr', 6000);
+  if (Array.isArray(visionTickers) && visionTickers.length > 0) {
+    const fallbackPairs: FuturesSymbolInfo[] = visionTickers
+      .filter((t: any) => {
+        const sym = t?.symbol;
+        const lp = parseFloat(t?.lastPrice || '0');
+        const qv = parseFloat(t?.quoteVolume || '0');
+        return (
+          typeof sym === 'string' &&
+          sym.endsWith('USDT') &&
+          !sym.endsWith('UPUSDT') &&
+          !sym.endsWith('DOWNUSDT') &&
+          !sym.endsWith('BULLUSDT') &&
+          !sym.endsWith('BEARUSDT') &&
+          lp > 0 &&
+          qv > 100000
+        );
+      })
+      .map((t: any) => {
+        const lp = parseFloat(t.lastPrice || '0');
+        const precision = lp >= 1000 ? 1 : lp >= 100 ? 2 : lp >= 1 ? 4 : lp >= 0.01 ? 5 : 7;
+        return {
+          symbol: t.symbol,
+          baseAsset: t.symbol.slice(0, -4),
+          quoteAsset: 'USDT',
+          pricePrecision: precision,
+          quantityPrecision: 3,
+          lastPrice: lp,
+          priceChangePercent: parseFloat(t.priceChangePercent || '0'),
+          quoteVolume: parseFloat(t.quoteVolume || '0'),
+        };
+      })
+      .sort((a: FuturesSymbolInfo, b: FuturesSymbolInfo) => b.quoteVolume - a.quoteVolume);
 
-  cachedFuturesSymbols = { timestamp: now, data: pairs };
-  return pairs;
+    if (fallbackPairs.length > 0) {
+      cachedFuturesSymbols = { timestamp: now, data: fallbackPairs };
+      return fallbackPairs;
+    }
+  }
+
+  throw new Error('Unable to load Binance Futures exchange symbols');
 }
 
 let cachedPremiumIndex: { timestamp: number; map: Map<string, any> } | null = null;
@@ -686,15 +743,17 @@ Provide an institutional assessment. Return strictly valid JSON.
 // Setup Vite middleware in dev or static files in production
 async function startServer() {
   if (!isProduction) {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
   } else {
-    app.use(express.static(path.resolve(__dirname, 'dist')));
+    const distDir = path.resolve(process.cwd(), 'dist');
+    app.use(express.static(distDir));
     app.get('*', (_req, res) => {
-      res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
+      res.sendFile(path.resolve(distDir, 'index.html'));
     });
   }
 

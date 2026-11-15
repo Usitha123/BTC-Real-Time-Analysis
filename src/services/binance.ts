@@ -8,9 +8,50 @@ import {
   FuturesSymbolInfo,
   TradeHorizon,
   ScreenerResponse,
+  ScreenerSetupEntry,
+  MultiTimeframeSignal,
 } from '../types/crypto';
+import {
+  analyzeHorizonTradeSetup,
+  getStrictlyClosedCandles,
+  HORIZON_CONFIG,
+} from './signalAnalyzer';
+import { evaluateTimeframe } from './multiTimeframe';
 
 export type ConnectionStatus = 'CONNECTED' | 'RECONNECTING' | 'DISCONNECTED' | 'ERROR';
+
+async function fetchJsonSafe(url: string, timeoutMs: number = 5500): Promise<any | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function inferPrecisionFromPrice(price: number): number {
+  if (!price || price <= 0) return 2;
+  if (price >= 1000) return 1;
+  if (price >= 100) return 2;
+  if (price >= 1) return 4;
+  if (price >= 0.01) return 5;
+  return 7;
+}
+
+const MTF_SCREEN_INTERVALS: ('1m' | '5m' | '15m' | '30m' | '1h' | '4h' | '1d')[] = [
+  '1m',
+  '5m',
+  '15m',
+  '30m',
+  '1h',
+  '4h',
+  '1d',
+];
 
 export interface BinanceStreamHandlers {
   onCandle?: (candle: Candle, isClosed: boolean) => void;
@@ -57,19 +98,120 @@ export class BinanceDataService {
     }
   }
 
+  private clientScreenerCache = new Map<string, { timestamp: number; data: ScreenerResponse }>();
+
   // Fetch all active Binance USD-M Perpetual Futures USDT symbols sorted by 24h volume
+  // Uses direct browser fapi.binance.com first (bypasses Vercel US serverless geo-blocks), then /api proxy, then Binance Vision mirror
   public async fetchFuturesSymbols(): Promise<FuturesSymbolInfo[]> {
-    const res = await fetch('/api/binance/futures/symbols');
-    if (!res.ok) {
-      throw new Error('Failed to load Binance Futures symbols');
+    // 1. Direct browser call to Binance USD-M Futures API
+    const [infoJson, fapiTickers] = await Promise.all([
+      fetchJsonSafe('https://fapi.binance.com/fapi/v1/exchangeInfo', 6000),
+      fetchJsonSafe('https://fapi.binance.com/fapi/v1/ticker/24hr', 6000),
+    ]);
+
+    if (infoJson && Array.isArray(infoJson.symbols)) {
+      const tickerMap = new Map<string, any>();
+      if (Array.isArray(fapiTickers)) {
+        for (const t of fapiTickers) {
+          if (t && t.symbol) tickerMap.set(t.symbol, t);
+        }
+      }
+      const directPairs: FuturesSymbolInfo[] = infoJson.symbols
+        .filter(
+          (s: any) =>
+            s.contractType === 'PERPETUAL' &&
+            s.status === 'TRADING' &&
+            s.quoteAsset === 'USDT'
+        )
+        .map((s: any) => {
+          const t = tickerMap.get(s.symbol);
+          return {
+            symbol: s.symbol,
+            baseAsset: s.baseAsset,
+            quoteAsset: s.quoteAsset,
+            pricePrecision: typeof s.pricePrecision === 'number' ? s.pricePrecision : 2,
+            quantityPrecision: typeof s.quantityPrecision === 'number' ? s.quantityPrecision : 3,
+            lastPrice: t ? parseFloat(t.lastPrice || '0') : 0,
+            priceChangePercent: t ? parseFloat(t.priceChangePercent || '0') : 0,
+            quoteVolume: t ? parseFloat(t.quoteVolume || '0') : 0,
+          };
+        })
+        .sort((a: FuturesSymbolInfo, b: FuturesSymbolInfo) => b.quoteVolume - a.quoteVolume);
+
+      if (directPairs.length > 0) return directPairs;
     }
-    const data = await res.json();
-    if (Array.isArray(data)) return data as FuturesSymbolInfo[];
-    if (data && Array.isArray(data.symbols)) return data.symbols as FuturesSymbolInfo[];
-    return [];
+
+    if (Array.isArray(fapiTickers) && fapiTickers.length > 0) {
+      const derived: FuturesSymbolInfo[] = fapiTickers
+        .filter((t: any) => typeof t?.symbol === 'string' && t.symbol.endsWith('USDT'))
+        .map((t: any) => {
+          const lastPrice = parseFloat(t.lastPrice || '0');
+          return {
+            symbol: t.symbol,
+            baseAsset: t.symbol.slice(0, -4),
+            quoteAsset: 'USDT',
+            pricePrecision: inferPrecisionFromPrice(lastPrice),
+            quantityPrecision: 3,
+            lastPrice,
+            priceChangePercent: parseFloat(t.priceChangePercent || '0'),
+            quoteVolume: parseFloat(t.quoteVolume || '0'),
+          };
+        })
+        .sort((a, b) => b.quoteVolume - a.quoteVolume);
+
+      if (derived.length > 0) return derived;
+    }
+
+    // 2. Fallback to backend proxy
+    const proxyData = await fetchJsonSafe('/api/binance/futures/symbols', 6000);
+    if (Array.isArray(proxyData) && proxyData.length > 0) {
+      return proxyData as FuturesSymbolInfo[];
+    }
+    if (proxyData && Array.isArray(proxyData.symbols) && proxyData.symbols.length > 0) {
+      return proxyData.symbols as FuturesSymbolInfo[];
+    }
+
+    // 3. Global unblocked Binance Data Vision fallback (for strict restricted networks)
+    const visionTickers = await fetchJsonSafe('https://data-api.binance.vision/api/v3/ticker/24hr', 6000);
+    if (Array.isArray(visionTickers) && visionTickers.length > 0) {
+      const visionPairs: FuturesSymbolInfo[] = visionTickers
+        .filter((t: any) => {
+          const sym = t?.symbol;
+          const qv = parseFloat(t?.quoteVolume || '0');
+          const lp = parseFloat(t?.lastPrice || '0');
+          return (
+            typeof sym === 'string' &&
+            sym.endsWith('USDT') &&
+            !sym.endsWith('UPUSDT') &&
+            !sym.endsWith('DOWNUSDT') &&
+            !sym.endsWith('BULLUSDT') &&
+            !sym.endsWith('BEARUSDT') &&
+            lp > 0 &&
+            qv > 100000
+          );
+        })
+        .map((t: any) => {
+          const lastPrice = parseFloat(t.lastPrice || '0');
+          return {
+            symbol: t.symbol,
+            baseAsset: t.symbol.slice(0, -4),
+            quoteAsset: 'USDT',
+            pricePrecision: inferPrecisionFromPrice(lastPrice),
+            quantityPrecision: 3,
+            lastPrice,
+            priceChangePercent: parseFloat(t.priceChangePercent || '0'),
+            quoteVolume: parseFloat(t.quoteVolume || '0'),
+          };
+        })
+        .sort((a, b) => b.quoteVolume - a.quoteVolume);
+
+      if (visionPairs.length > 0) return visionPairs;
+    }
+
+    throw new Error('Failed to load Binance Futures symbols');
   }
 
-  // Fetch historical klines from Binance USD-M Futures with automatic proxy fallback
+  // Fetch historical klines from Binance USD-M Futures with proxy and Vision fallbacks
   public async fetchHistoricalKlines(
     interval: ChartTimeframe,
     limit: number = 300,
@@ -79,27 +221,14 @@ export class BinanceDataService {
     const binanceInterval = BinanceDataService.mapTimeframeToBinance(interval);
     const directUrl = `https://fapi.binance.com/fapi/v1/klines?symbol=${sym}&interval=${binanceInterval}&limit=${limit}`;
     const proxyUrl = `/api/binance/klines?symbol=${sym}&interval=${binanceInterval}&limit=${limit}`;
+    const visionUrl = `https://data-api.binance.vision/api/v3/klines?symbol=${sym}&interval=${binanceInterval}&limit=${limit}`;
 
-    let rawData: any[] | null = null;
-
-    try {
-      const res = await fetch(directUrl);
-      if (res.ok) {
-        rawData = await res.json();
-      }
-    } catch {
-      // Fallback to server proxy
+    let rawData: any[] | null = await fetchJsonSafe(directUrl, 5500);
+    if (!Array.isArray(rawData) || rawData.length === 0) {
+      rawData = await fetchJsonSafe(proxyUrl, 5500);
     }
-
-    if (!rawData) {
-      try {
-        const res = await fetch(proxyUrl);
-        if (res.ok) {
-          rawData = await res.json();
-        }
-      } catch (err) {
-        console.error('Failed to fetch historical klines via proxy:', err);
-      }
+    if (!Array.isArray(rawData) || rawData.length === 0) {
+      rawData = await fetchJsonSafe(visionUrl, 5500);
     }
 
     if (!rawData || !Array.isArray(rawData)) {
@@ -164,25 +293,15 @@ export class BinanceDataService {
   // Fetch 24-hr ticker stats
   public async fetch24hTicker(symbol: string = this.currentSymbol): Promise<Ticker24h | null> {
     const sym = symbol.toUpperCase();
-    const directUrl = `https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=${sym}`;
-    const proxyUrl = `/api/binance/ticker?symbol=${sym}`;
-
-    let data: any = null;
-    try {
-      const res = await fetch(directUrl);
-      if (res.ok) data = await res.json();
-    } catch {}
-
-    if (!data) {
-      try {
-        const res = await fetch(proxyUrl);
-        if (res.ok) data = await res.json();
-      } catch (e) {
-        console.error('Failed to fetch 24h ticker:', e);
-      }
+    let data = await fetchJsonSafe(`https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=${sym}`, 4500);
+    if (!data || data.code) {
+      data = await fetchJsonSafe(`/api/binance/ticker?symbol=${sym}`, 4500);
+    }
+    if (!data || data.code) {
+      data = await fetchJsonSafe(`https://data-api.binance.vision/api/v3/ticker/24hr?symbol=${sym}`, 4500);
     }
 
-    if (!data || data.code) return null;
+    if (!data || data.code || !data.lastPrice) return null;
 
     return {
       symbol: data.symbol,
@@ -206,24 +325,15 @@ export class BinanceDataService {
     symbol: string = this.currentSymbol
   ): Promise<OrderBook | null> {
     const sym = symbol.toUpperCase();
-    const directUrl = `https://fapi.binance.com/fapi/v1/depth?symbol=${sym}&limit=${limit}`;
-    const proxyUrl = `/api/binance/depth?symbol=${sym}&limit=${limit}`;
-
-    let data: any = null;
-    try {
-      const res = await fetch(directUrl);
-      if (res.ok) data = await res.json();
-    } catch {}
-
-    if (!data) {
-      try {
-        const res = await fetch(proxyUrl);
-        if (res.ok) data = await res.json();
-      } catch {}
+    let data = await fetchJsonSafe(`https://fapi.binance.com/fapi/v1/depth?symbol=${sym}&limit=${limit}`, 4500);
+    if (!data || !data.bids) {
+      data = await fetchJsonSafe(`/api/binance/depth?symbol=${sym}&limit=${limit}`, 4500);
+    }
+    if (!data || !data.bids) {
+      data = await fetchJsonSafe(`https://data-api.binance.vision/api/v3/depth?symbol=${sym}&limit=${limit}`, 4500);
     }
 
     if (!data || !data.bids || !data.asks) return null;
-
     return this.parseOrderBook(data);
   }
 
@@ -233,20 +343,12 @@ export class BinanceDataService {
     symbol: string = this.currentSymbol
   ): Promise<Trade[]> {
     const sym = symbol.toUpperCase();
-    const directUrl = `https://fapi.binance.com/fapi/v1/trades?symbol=${sym}&limit=${limit}`;
-    const proxyUrl = `/api/binance/trades?symbol=${sym}&limit=${limit}`;
-
-    let data: any = null;
-    try {
-      const res = await fetch(directUrl);
-      if (res.ok) data = await res.json();
-    } catch {}
-
-    if (!data) {
-      try {
-        const res = await fetch(proxyUrl);
-        if (res.ok) data = await res.json();
-      } catch {}
+    let data = await fetchJsonSafe(`https://fapi.binance.com/fapi/v1/trades?symbol=${sym}&limit=${limit}`, 4500);
+    if (!Array.isArray(data)) {
+      data = await fetchJsonSafe(`/api/binance/trades?symbol=${sym}&limit=${limit}`, 4500);
+    }
+    if (!Array.isArray(data)) {
+      data = await fetchJsonSafe(`https://data-api.binance.vision/api/v3/trades?symbol=${sym}&limit=${limit}`, 4500);
     }
 
     if (!data || !Array.isArray(data)) return [];
@@ -260,34 +362,263 @@ export class BinanceDataService {
     }));
   }
 
-  // Fetch Binance USD-M Futures metrics (Mark Price, Funding Rate, Open Interest, Long/Short & Taker Ratios)
+  // Fetch Binance USD-M Futures metrics directly from browser first, falling back to /api proxy
   public async fetchFuturesMetrics(
     symbol: string = this.currentSymbol
   ): Promise<FuturesMarketMetrics | null> {
-    try {
-      const sym = symbol.toUpperCase();
-      const res = await fetch(`/api/binance/futures/metrics?symbol=${sym}`);
-      if (!res.ok) return null;
-      const data = await res.json();
-      if (!data || !data.markPrice) return null;
-      return data as FuturesMarketMetrics;
-    } catch {
-      return null;
+    const sym = symbol.toUpperCase();
+    const now = Date.now();
+
+    // 1. Direct browser calls to fapi.binance.com (avoids Vercel US server IP block)
+    const [prem, oi, lsArr, takerArr] = await Promise.all([
+      fetchJsonSafe(`https://fapi.binance.com/fapi/v1/premiumIndex?symbol=${sym}`, 4500),
+      fetchJsonSafe(`https://fapi.binance.com/fapi/v1/openInterest?symbol=${sym}`, 4000),
+      fetchJsonSafe(`https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol=${sym}&period=15m&limit=2`, 4000),
+      fetchJsonSafe(`https://fapi.binance.com/futures/data/takerlongshortRatio?symbol=${sym}&period=15m&limit=2`, 4000),
+    ]);
+
+    if (prem && prem.markPrice) {
+      const markPrice = parseFloat(prem.markPrice || '0');
+      const indexPrice = parseFloat(prem.indexPrice || '0');
+      const basisPct = indexPrice > 0 ? ((markPrice - indexPrice) / indexPrice) * 100 : 0;
+      const fundingRate = parseFloat(prem.lastFundingRate || '0');
+      const nextFundingTime = Number(prem.nextFundingTime || 0);
+      const openInterestBtc = oi ? parseFloat(oi.openInterest || '0') : 0;
+      const openInterestUsd = openInterestBtc * markPrice;
+      const latestLs = Array.isArray(lsArr) && lsArr.length > 0 ? lsArr[lsArr.length - 1] : null;
+      const latestTaker = Array.isArray(takerArr) && takerArr.length > 0 ? takerArr[takerArr.length - 1] : null;
+
+      return {
+        symbol: sym,
+        markPrice,
+        indexPrice,
+        basisPct,
+        fundingRate,
+        nextFundingTime,
+        openInterestBtc,
+        openInterestUsd,
+        longShortRatio: latestLs ? parseFloat(latestLs.longShortRatio || '1') : 1,
+        longAccountPct: latestLs ? parseFloat(latestLs.longAccount || '0.5') * 100 : 50,
+        shortAccountPct: latestLs ? parseFloat(latestLs.shortAccount || '0.5') * 100 : 50,
+        takerBuySellRatio: latestTaker ? parseFloat(latestTaker.buySellRatio || '1') : 1,
+        fetchedAt: now,
+      };
     }
+
+    // 2. Fallback to backend proxy
+    const proxyData = await fetchJsonSafe(`/api/binance/futures/metrics?symbol=${sym}`, 5000);
+    if (proxyData && proxyData.markPrice) {
+      return proxyData as FuturesMarketMetrics;
+    }
+
+    return null;
   }
 
-  // Fetch multi-coin Top Futures Screener scored with exact 20-indicator + MTF engine
+  // Fetch multi-coin Top Futures Screener: uses server endpoint when available, automatically runs in browser if Vercel Lambda is geo-blocked
   public async fetchTopCoinsScreener(
     horizon: TradeHorizon = '5h',
     limit: number = 16,
     forceRefresh: boolean = false
   ): Promise<ScreenerResponse> {
+    const cacheKey = `${horizon}_${limit}`;
+    const now = Date.now();
+    const cachedClient = this.clientScreenerCache.get(cacheKey);
+    if (!forceRefresh && cachedClient && now - cachedClient.timestamp < 45000) {
+      return cachedClient.data;
+    }
+
     const refreshParam = forceRefresh ? '&refresh=1' : '';
-    const res = await fetch(`/api/binance/futures/screener?horizon=${horizon}&limit=${limit}${refreshParam}`);
-    if (!res.ok) {
+    const serverData = await fetchJsonSafe(
+      `/api/binance/futures/screener?horizon=${horizon}&limit=${limit}${refreshParam}`,
+      8500
+    );
+
+    if (serverData && Array.isArray(serverData.setups) && serverData.setups.length > 0) {
+      this.clientScreenerCache.set(cacheKey, { timestamp: now, data: serverData });
+      return serverData as ScreenerResponse;
+    }
+
+    // Browser-direct fallback (essential for Vercel US hosting where Binance blocks serverless IPs)
+    const [symbols, premArr] = await Promise.all([
+      this.fetchFuturesSymbols(),
+      fetchJsonSafe('https://fapi.binance.com/fapi/v1/premiumIndex', 5000),
+    ]);
+
+    const premMap = new Map<string, any>();
+    if (Array.isArray(premArr)) {
+      for (const p of premArr) {
+        if (p && p.symbol) premMap.set(p.symbol, p);
+      }
+    }
+
+    const candidates = symbols.filter((s) => s.lastPrice > 0 && s.quoteVolume > 0).slice(0, limit);
+    const meta = HORIZON_CONFIG[horizon];
+    const setups: ScreenerSetupEntry[] = [];
+
+    const concurrency = 4;
+    let nextIdx = 0;
+    const workers = Array.from({ length: Math.min(concurrency, candidates.length) }, async () => {
+      while (nextIdx < candidates.length) {
+        const symInfo = candidates[nextIdx++];
+        try {
+          const sym = symInfo.symbol;
+          const klineResults = await Promise.all(
+            MTF_SCREEN_INTERVALS.map((tf) => {
+              const kLimit = tf === meta.chartTf ? 220 : 80;
+              return this.fetchHistoricalKlines(tf, kLimit, sym)
+                .then((candles) => ({ tf, candles }))
+                .catch(() => ({ tf, candles: [] as Candle[] }));
+            })
+          );
+
+          const [oiJson, lsArr, takerArr] = await Promise.all([
+            fetchJsonSafe(`https://fapi.binance.com/fapi/v1/openInterest?symbol=${sym}`, 3500),
+            fetchJsonSafe(`https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol=${sym}&period=15m&limit=2`, 3500),
+            fetchJsonSafe(`https://fapi.binance.com/futures/data/takerlongshortRatio?symbol=${sym}&period=15m&limit=2`, 3500),
+          ]);
+
+          const candlesByTf = new Map<string, Candle[]>();
+          for (const r of klineResults) {
+            if (r.candles.length > 0) candlesByTf.set(r.tf, r.candles);
+          }
+
+          const primaryCandles = candlesByTf.get(meta.chartTf) || [];
+          if (primaryCandles.length < 55) continue;
+
+          const multiTfSignals: MultiTimeframeSignal[] = [];
+          for (const tf of MTF_SCREEN_INTERVALS) {
+            const list = candlesByTf.get(tf);
+            if (!list) continue;
+            const closed = getStrictlyClosedCandles(list);
+            if (closed.length >= 15) {
+              multiTfSignals.push(evaluateTimeframe(tf, closed.slice(-80)));
+            }
+          }
+
+          const prem = premMap.get(sym);
+          const markPrice = prem ? parseFloat(prem.markPrice || `${symInfo.lastPrice}`) : symInfo.lastPrice;
+          const indexPrice = prem ? parseFloat(prem.indexPrice || `${markPrice}`) : markPrice;
+          const basisPct = indexPrice > 0 ? ((markPrice - indexPrice) / indexPrice) * 100 : 0;
+          const fundingRate = prem ? parseFloat(prem.lastFundingRate || '0') : 0;
+          const nextFundingTime = prem ? Number(prem.nextFundingTime || 0) : 0;
+          const openInterestBtc = oiJson ? parseFloat(oiJson.openInterest || '0') : 0;
+          const openInterestUsd = openInterestBtc * markPrice;
+          const latestLs = Array.isArray(lsArr) && lsArr.length > 0 ? lsArr[lsArr.length - 1] : null;
+          const latestTaker = Array.isArray(takerArr) && takerArr.length > 0 ? takerArr[takerArr.length - 1] : null;
+
+          const futuresMetrics: FuturesMarketMetrics = {
+            symbol: sym,
+            markPrice,
+            indexPrice,
+            basisPct,
+            fundingRate,
+            nextFundingTime,
+            openInterestBtc,
+            openInterestUsd,
+            longShortRatio: latestLs ? parseFloat(latestLs.longShortRatio || '1') : 1,
+            longAccountPct: latestLs ? parseFloat(latestLs.longAccount || '0.5') * 100 : 50,
+            shortAccountPct: latestLs ? parseFloat(latestLs.shortAccount || '0.5') * 100 : 50,
+            takerBuySellRatio: latestTaker ? parseFloat(latestTaker.buySellRatio || '1') : 1,
+            fetchedAt: now,
+          };
+
+          const setup = analyzeHorizonTradeSetup(
+            primaryCandles,
+            horizon,
+            multiTfSignals,
+            futuresMetrics,
+            sym,
+            symInfo.pricePrecision
+          );
+
+          if (!setup) continue;
+
+          const mtfBullCount = multiTfSignals.filter((s) => s.trend === 'BULLISH').length;
+          const mtfBearCount = multiTfSignals.filter((s) => s.trend === 'BEARISH').length;
+          const directionalNetRatio =
+            Math.abs(setup.bullishCount - setup.bearishCount) / Math.max(1, setup.totalCriteria);
+          const mtfDominance = Math.max(mtfBullCount, mtfBearCount) / Math.max(1, multiTfSignals.length || 7);
+          const backtestContribution = setup.backtestTrades >= 4 ? setup.backtestWinRate * 0.35 : 14;
+          const rrContribution = Math.min(setup.riskRewardRatio, 3.0) * 8;
+          const rawRank =
+            (setup.action !== 'WAIT' ? 100 : 0) +
+            directionalNetRatio * 45 +
+            setup.confidenceScore * 0.45 +
+            backtestContribution +
+            rrContribution +
+            mtfDominance * 20;
+
+          setups.push({
+            symbol: sym,
+            baseAsset: symInfo.baseAsset,
+            pricePrecision: setup.pricePrecision,
+            lastPrice: symInfo.lastPrice,
+            priceChangePercent: symInfo.priceChangePercent,
+            quoteVolume: symInfo.quoteVolume,
+            horizon: setup.horizon,
+            horizonLabel: setup.horizonLabel,
+            timeframe: setup.timeframe,
+            action: setup.action,
+            entryPrice: setup.entryPrice,
+            entryZone: setup.entryZone,
+            takeProfit1: setup.takeProfit1,
+            takeProfit2: setup.takeProfit2,
+            stopLoss: setup.stopLoss,
+            tp1Pct: setup.tp1Pct,
+            tp2Pct: setup.tp2Pct,
+            slPct: setup.slPct,
+            riskRewardRatio: setup.riskRewardRatio,
+            bullishCount: setup.bullishCount,
+            bearishCount: setup.bearishCount,
+            neutralCount: setup.neutralCount,
+            totalCriteria: setup.totalCriteria,
+            agreementPct: setup.agreementPct,
+            confidenceScore: setup.confidenceScore,
+            backtestWinRate: setup.backtestWinRate,
+            backtestTrades: setup.backtestTrades,
+            backtestAvgRR: setup.backtestAvgRR,
+            recommendedLeverage: setup.recommendedLeverage,
+            maxSafeLeverage: setup.maxSafeLeverage,
+            detectedPattern: setup.detectedPattern,
+            swingSupport: setup.swingSupport,
+            swingResistance: setup.swingResistance,
+            pivotPoint: setup.pivotPoint,
+            supertrendLevel: setup.supertrendLevel,
+            fundingRate: futuresMetrics.fundingRate,
+            basisPct: futuresMetrics.basisPct,
+            takerBuySellRatio: futuresMetrics.takerBuySellRatio,
+            longAccountPct: futuresMetrics.longAccountPct,
+            shortAccountPct: futuresMetrics.shortAccountPct,
+            openInterestUsd: futuresMetrics.openInterestUsd,
+            mtfBullCount,
+            mtfBearCount,
+            rankScore: parseFloat(rawRank.toFixed(1)),
+            summary: setup.summary,
+            criteria: setup.criteria,
+            closedCandleTime: setup.closedCandleTime,
+            generatedAt: setup.generatedAt,
+          });
+        } catch {
+          // Skip individual symbol failure gracefully
+        }
+      }
+    });
+
+    await Promise.all(workers);
+
+    setups.sort((a, b) => b.rankScore - a.rankScore);
+    if (setups.length === 0) {
       throw new Error('Failed to scan Binance Futures pairs');
     }
-    return (await res.json()) as ScreenerResponse;
+
+    const result: ScreenerResponse = {
+      horizon,
+      scannedCount: setups.length,
+      generatedAt: now,
+      setups,
+    };
+    this.clientScreenerCache.set(cacheKey, { timestamp: now, data: result });
+    return result;
   }
 
   // Helper to parse order book

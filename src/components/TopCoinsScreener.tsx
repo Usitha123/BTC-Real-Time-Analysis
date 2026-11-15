@@ -143,14 +143,14 @@ Criteria (${entry.totalCriteria}): ${entry.bullishCount} Bullish / ${entry.beari
           </div>
 
           {/* Controls */}
-          <div className="flex flex-wrap items-center gap-2.5">
+          <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-2.5 w-full xl:w-auto">
             {/* Horizon Tabs */}
-            <div className="inline-flex items-center p-1 rounded-lg bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+            <div className="grid grid-cols-5 sm:inline-flex items-center p-1 rounded-lg bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 w-full sm:w-auto">
               {TRADE_HORIZONS.map((h) => (
                 <button
                   key={h}
                   onClick={() => onChangeHorizon(h)}
-                  className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                  className={`px-2 sm:px-2.5 py-1.5 sm:py-1 rounded-md text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer text-center ${
                     activeHorizon === h
                       ? 'bg-slate-900 dark:bg-amber-500 text-white dark:text-slate-950 shadow-sm'
                       : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
@@ -162,7 +162,7 @@ Criteria (${entry.totalCriteria}): ${entry.bullishCount} Bullish / ${entry.beari
             </div>
 
             {/* Signal Filter */}
-            <div className="inline-flex items-center p-1 rounded-lg bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+            <div className="grid grid-cols-4 sm:inline-flex items-center p-1 rounded-lg bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 w-full sm:w-auto">
               {(
                 [
                   { id: 'ALL', label: `All (${setups.length})` },
@@ -174,7 +174,7 @@ Criteria (${entry.totalCriteria}): ${entry.bullishCount} Bullish / ${entry.beari
                 <button
                   key={tab.id}
                   onClick={() => setSignalFilter(tab.id)}
-                  className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                  className={`px-1.5 sm:px-2.5 py-1.5 sm:py-1 rounded-md text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer text-center ${
                     signalFilter === tab.id
                       ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-sm'
                       : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
@@ -185,28 +185,30 @@ Criteria (${entry.totalCriteria}): ${entry.bullishCount} Bullish / ${entry.beari
               ))}
             </div>
 
-            {/* Sort Select */}
-            <select
-              value={sortMode}
-              onChange={(e) => setSortMode(e.target.value as SortMode)}
-              aria-label="Sort screened coins"
-              className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 cursor-pointer focus:outline-none focus:border-amber-500"
-            >
-              <option value="RANK">Sort: Best Setup Score</option>
-              <option value="CONFIDENCE">Sort: Highest Confidence</option>
-              <option value="WINRATE">Sort: Backtest Win %</option>
-              <option value="RR">Sort: Best Risk / Reward</option>
-              <option value="VOLUME">Sort: 24h Volume</option>
-            </select>
+            <div className="grid grid-cols-1 sm:flex items-center gap-2 w-full sm:w-auto">
+              {/* Sort Select */}
+              <select
+                value={sortMode}
+                onChange={(e) => setSortMode(e.target.value as SortMode)}
+                aria-label="Sort screened coins"
+                className="w-full sm:w-auto px-3 py-2 sm:py-1.5 rounded-lg text-xs font-semibold bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 cursor-pointer focus:outline-none focus:border-amber-500"
+              >
+                <option value="RANK">Sort: Best Setup Score</option>
+                <option value="CONFIDENCE">Sort: Highest Confidence</option>
+                <option value="WINRATE">Sort: Backtest Win %</option>
+                <option value="RR">Sort: Best Risk / Reward</option>
+                <option value="VOLUME">Sort: 24h Volume</option>
+              </select>
 
-            <button
-              onClick={onRefresh}
-              disabled={isLoading}
-              className="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-amber-500 hover:bg-amber-400 disabled:opacity-60 text-slate-950 transition-colors inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
-              <span>{isLoading ? 'Scanning...' : 'Scan Live Market'}</span>
-            </button>
+              <button
+                onClick={onRefresh}
+                disabled={isLoading}
+                className="w-full sm:w-auto justify-center px-3.5 py-2 sm:py-1.5 rounded-lg text-xs font-semibold bg-amber-500 hover:bg-amber-400 disabled:opacity-60 text-slate-950 transition-colors inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+                <span>{isLoading ? 'Scanning...' : 'Scan Live Market'}</span>
+              </button>
+            </div>
           </div>
         </div>
 
@@ -363,10 +365,206 @@ Criteria (${entry.totalCriteria}): ${entry.bullishCount} Bullish / ${entry.beari
             </button>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="border-b border-slate-200 dark:border-slate-800 text-[11px] font-semibold text-slate-500 dark:text-slate-400 bg-slate-50/50 dark:bg-slate-950/30">
+          <>
+            {/* Mobile Screener List */}
+            <div className="md:hidden divide-y divide-slate-200 dark:divide-slate-800">
+              {filteredAndSorted.map((entry, idx) => {
+                const isBuy = entry.action === 'BUY';
+                const isSell = entry.action === 'SELL';
+                const isExpanded = expandedSymbol === entry.symbol;
+                const isCurrent = entry.symbol === activeSymbol;
+                const fP = (v: number) => formatCoinPrice(v, entry.entryPrice, entry.pricePrecision);
+                const fC = (v: number) => formatCompactCoinPrice(v, entry.entryPrice, entry.pricePrecision);
+
+                return (
+                  <div
+                    key={entry.symbol}
+                    className={`p-4 space-y-3 ${
+                      isCurrent ? 'bg-amber-500/5 dark:bg-amber-500/5' : ''
+                    }`}
+                  >
+                    {/* Top Row: Coin & Signal & Price */}
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-mono text-xs text-slate-400">#{idx + 1}</span>
+                          <span className="text-sm font-bold font-mono text-slate-900 dark:text-slate-100">
+                            {entry.baseAsset}/USDT
+                          </span>
+                          <span
+                            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold font-mono ${
+                              isBuy
+                                ? 'bg-emerald-600 text-white'
+                                : isSell
+                                ? 'bg-rose-600 text-white'
+                                : 'bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300'
+                            }`}
+                          >
+                            {isBuy && <TrendingUp className="w-3 h-3" />}
+                            {isSell && <TrendingDown className="w-3 h-3" />}
+                            {!isBuy && !isSell && <Minus className="w-3 h-3" />}
+                            {entry.action}
+                          </span>
+                        </div>
+                        <div className="text-[11px] font-mono tabular-nums text-slate-500 dark:text-slate-400 mt-0.5 truncate">
+                          Vol {formatUsdCompact(entry.quoteVolume)} · {entry.detectedPattern}
+                        </div>
+                      </div>
+
+                      <div className="text-right font-mono tabular-nums shrink-0">
+                        <div className="text-sm font-bold text-slate-900 dark:text-slate-100">
+                          ${fP(entry.lastPrice)}
+                        </div>
+                        <div
+                          className={`text-[11px] font-semibold ${
+                            entry.priceChangePercent >= 0
+                              ? 'text-emerald-600 dark:text-emerald-400'
+                              : 'text-rose-600 dark:text-rose-400'
+                          }`}
+                        >
+                          {entry.priceChangePercent >= 0 ? '+' : ''}
+                          {entry.priceChangePercent.toFixed(2)}%
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* 3-Column Levels Grid */}
+                    <div className="grid grid-cols-3 gap-2 pt-2 border-t border-slate-100 dark:border-slate-800/80 font-mono tabular-nums text-xs">
+                      <div className="min-w-0">
+                        <span className="text-[10px] font-sans text-slate-500 block">Entry</span>
+                        <span className="font-bold text-slate-900 dark:text-slate-100 block truncate">
+                          ${fP(entry.entryPrice)}
+                        </span>
+                      </div>
+                      <div className="min-w-0">
+                        <span className="text-[10px] font-sans text-slate-500 block">TP1 ({entry.tp1Pct >= 0 ? '+' : ''}{entry.tp1Pct}%)</span>
+                        <span className="font-bold text-emerald-600 dark:text-emerald-400 block truncate">
+                          ${fC(entry.takeProfit1)}
+                        </span>
+                      </div>
+                      <div className="min-w-0">
+                        <span className="text-[10px] font-sans text-slate-500 block">SL ({entry.slPct}%)</span>
+                        <span className="font-bold text-rose-600 dark:text-rose-400 block truncate">
+                          ${fC(entry.stopLoss)}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Meta Strip */}
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono tabular-nums text-slate-500 dark:text-slate-400">
+                      <span>
+                        {entry.bullishCount}B/{entry.bearishCount}S/{entry.neutralCount}N · MTF {entry.mtfBullCount}B·{entry.mtfBearCount}S / 7
+                      </span>
+                      <span>
+                        {entry.recommendedLeverage}x Iso · R:R 1:{entry.riskRewardRatio} · {entry.backtestWinRate}% Win
+                      </span>
+                    </div>
+
+                    {/* Mobile Actions */}
+                    <div className="grid grid-cols-2 gap-2 pt-1">
+                      <button
+                        onClick={() => setExpandedSymbol(isExpanded ? null : entry.symbol)}
+                        className="px-3 py-2 rounded-lg text-xs font-medium border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 inline-flex items-center justify-center gap-1 cursor-pointer"
+                      >
+                        <span>{isExpanded ? 'Hide Audit' : `${entry.totalCriteria} Criteria Audit`}</span>
+                        {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                      </button>
+                      <button
+                        onClick={() => onSelectCoin(entry)}
+                        className="px-3 py-2 rounded-lg text-xs font-semibold bg-slate-900 dark:bg-amber-500 text-white dark:text-slate-950 hover:opacity-90 inline-flex items-center justify-center gap-1 cursor-pointer"
+                      >
+                        <span>Trade {entry.baseAsset}</span>
+                        <ArrowUpRight className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+
+                    {/* Expanded Inline 20-Criteria Audit for Mobile */}
+                    {isExpanded && (
+                      <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-3">
+                        <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                          {entry.summary}
+                        </p>
+                        <div className="grid grid-cols-2 gap-2.5 text-[11px] font-mono tabular-nums pb-2 border-b border-slate-200 dark:border-slate-800">
+                          <div>
+                            <span className="font-sans text-slate-500 block">TP2 Target</span>
+                            <span className="font-semibold text-emerald-600 dark:text-emerald-400">${fP(entry.takeProfit2)}</span>
+                          </div>
+                          <div>
+                            <span className="font-sans text-slate-500 block">8h Funding / Taker</span>
+                            <span className="font-semibold text-slate-900 dark:text-slate-100">
+                              {(entry.fundingRate * 100).toFixed(4)}% · {entry.takerBuySellRatio.toFixed(2)}x
+                            </span>
+                          </div>
+                          <div>
+                            <span className="font-sans text-slate-500 block">Support / Resistance</span>
+                            <span className="font-semibold text-slate-900 dark:text-slate-100">
+                              ${fC(entry.swingSupport)} / ${fC(entry.swingResistance)}
+                            </span>
+                          </div>
+                          <div>
+                            <span className="font-sans text-slate-500 block">Long / Short Accts</span>
+                            <span className="font-semibold text-slate-900 dark:text-slate-100">
+                              {entry.longAccountPct.toFixed(0)}%L / {entry.shortAccountPct.toFixed(0)}%S
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="divide-y divide-slate-200 dark:divide-slate-800 max-h-72 overflow-y-auto">
+                          {entry.criteria.map((crit) => {
+                            const cBull = crit.signal === 'BULLISH';
+                            const cBear = crit.signal === 'BEARISH';
+                            return (
+                              <div key={crit.id} className="py-2 flex items-start justify-between gap-2">
+                                <div className="min-w-0">
+                                  <div className="text-xs font-semibold text-slate-900 dark:text-slate-100">
+                                    {crit.name}
+                                  </div>
+                                  <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                                    {crit.reason}
+                                  </div>
+                                </div>
+                                <div className="text-right shrink-0 font-mono tabular-nums">
+                                  <div
+                                    className={`text-xs font-bold ${
+                                      cBull
+                                        ? 'text-emerald-600 dark:text-emerald-400'
+                                        : cBear
+                                        ? 'text-rose-600 dark:text-rose-400'
+                                        : 'text-slate-500 dark:text-slate-400'
+                                    }`}
+                                  >
+                                    {crit.signal === 'BULLISH' ? 'Bull' : crit.signal === 'BEARISH' ? 'Bear' : 'Neut'}
+                                  </div>
+                                  <div className="text-[10px] text-slate-500">{crit.value}</div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+
+                        <button
+                          onClick={() => handleCopySetup(entry)}
+                          className="w-full py-2 rounded-lg text-xs font-semibold border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-200 inline-flex items-center justify-center gap-1.5 cursor-pointer"
+                        >
+                          {copiedSymbol === entry.symbol ? (
+                            <Check className="w-3.5 h-3.5 text-emerald-500" />
+                          ) : (
+                            <Copy className="w-3.5 h-3.5" />
+                          )}
+                          <span>{copiedSymbol === entry.symbol ? 'Copied Order' : 'Copy Setup'}</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Desktop Screener Table */}
+            <div className="hidden md:block overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="border-b border-slate-200 dark:border-slate-800 text-[11px] font-semibold text-slate-500 dark:text-slate-400 bg-slate-50/50 dark:bg-slate-950/30">
                   <th className="py-3 px-4"># & Coin</th>
                   <th className="py-3 px-3">Live Price / 24h</th>
                   <th className="py-3 px-3">Signal</th>
@@ -685,6 +883,7 @@ Criteria (${entry.totalCriteria}): ${entry.bullishCount} Bullish / ${entry.beari
               </tbody>
             </table>
           </div>
+          </>
         )}
       </section>
     </div>

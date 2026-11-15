@@ -54,6 +54,8 @@ export default function App() {
   const [activeHorizon, setActiveHorizon] = useState<TradeHorizon>('5h');
   const [activeSymbol, setActiveSymbol] = useState<string>('BTCUSDT');
   const [futuresSymbols, setFuturesSymbols] = useState<FuturesSymbolInfo[]>([]);
+  const [isSymbolsLoading, setIsSymbolsLoading] = useState<boolean>(true);
+  const [symbolsLoadError, setSymbolsLoadError] = useState<string | null>(null);
 
   // Market Data States
   const [candles, setCandles] = useState<Candle[]>([]);
@@ -155,6 +157,25 @@ export default function App() {
     },
     []
   );
+
+  const loadFuturesSymbols = useCallback(async (serviceOverride?: BinanceDataService) => {
+    const service = serviceOverride || binanceServiceRef.current;
+    if (!service) return;
+    setIsSymbolsLoading(true);
+    setSymbolsLoadError(null);
+    try {
+      const list = await service.fetchFuturesSymbols();
+      if (list.length > 0) {
+        setFuturesSymbols(list);
+      } else {
+        setSymbolsLoadError('No USD-M Futures pairs returned. Tap retry to reload.');
+      }
+    } catch (err: any) {
+      setSymbolsLoadError(err?.message || 'Unable to load Binance USD-M Futures pairs');
+    } finally {
+      setIsSymbolsLoading(false);
+    }
+  }, []);
 
   const loadHorizonChartData = useCallback(
     async (service: BinanceDataService, symbol: string, gen: number) => {
@@ -330,14 +351,7 @@ export default function App() {
     binanceServiceRef.current = service;
 
     // Fetch all active USD-M Futures symbols for searchable header selector
-    service
-      .fetchFuturesSymbols()
-      .then((list) => {
-        if (list.length > 0) {
-          setFuturesSymbols(list);
-        }
-      })
-      .catch((err) => console.warn('Futures symbol list load warning:', err));
+    loadFuturesSymbols(service);
 
     const initialGen = ++marketLoadGenRef.current;
     const initialSym = activeSymbolRef.current;
@@ -365,7 +379,7 @@ export default function App() {
       service.destroy();
       binanceServiceRef.current = null;
     };
-  }, [loadFuturesTelemetry, loadHorizonChartData, loadRealMultiTimeframeSignals, loadHistoricalData, loadScreenerData]);
+  }, [loadFuturesSymbols, loadFuturesTelemetry, loadHorizonChartData, loadRealMultiTimeframeSignals, loadHistoricalData, loadScreenerData]);
 
   // Switch active Futures symbol
   const handleSelectSymbol = useCallback(
@@ -657,12 +671,15 @@ export default function App() {
   const signalSetup = allHorizonSignals[activeHorizon];
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-[#06090e] text-slate-900 dark:text-slate-100 transition-colors duration-200">
+    <div className="min-h-screen overflow-x-hidden bg-slate-50 dark:bg-[#06090e] text-slate-900 dark:text-slate-100 transition-colors duration-200">
       {/* Top Header with Searchable USD-M Futures Coin Dropdown */}
       <Header
         activeSymbol={activeSymbol}
         futuresSymbols={futuresSymbols}
         onSelectSymbol={handleSelectSymbol}
+        isSymbolsLoading={isSymbolsLoading}
+        symbolsLoadError={symbolsLoadError}
+        onRetryLoadSymbols={() => loadFuturesSymbols()}
         pricePrecision={pricePrecision}
         ticker={ticker}
         currentPrice={currentPrice}
@@ -673,6 +690,9 @@ export default function App() {
         onToggleTheme={() => setIsDarkMode(!isDarkMode)}
         onManualRefresh={() => {
           const gen = marketLoadGenRef.current;
+          if (futuresSymbols.length === 0) {
+            loadFuturesSymbols();
+          }
           loadHistoricalData(activeTimeframe, activeSymbol, gen);
           if (binanceServiceRef.current) {
             loadRealMultiTimeframeSignals(binanceServiceRef.current, activeSymbol, gen);
@@ -686,44 +706,44 @@ export default function App() {
 
       {/* Workspace Mode Toolbar */}
       <div className="border-b border-slate-200 dark:border-slate-800/80 bg-white/70 dark:bg-slate-950/60">
-        <div className="max-w-[1720px] mx-auto px-3 sm:px-5 py-2.5 flex flex-wrap items-center justify-between gap-3">
-          <div className="inline-flex items-center p-1 rounded-lg bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+        <div className="max-w-[1720px] mx-auto px-3 sm:px-5 py-2.5 flex flex-col lg:flex-row lg:items-center justify-between gap-2.5">
+          <div className="grid grid-cols-3 sm:inline-flex items-center p-1 rounded-lg bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 w-full sm:w-auto">
             <button
               onClick={() => setViewMode('SIMPLE')}
-              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+              className={`inline-flex items-center justify-center gap-1.5 px-2 sm:px-3 py-1.5 rounded-md text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                 viewMode === 'SIMPLE'
                   ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-sm'
                   : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
               }`}
             >
-              <SlidersHorizontal className="w-3.5 h-3.5" />
-              <span>Simple Signal</span>
+              <SlidersHorizontal className="w-3.5 h-3.5 shrink-0" />
+              <span className="truncate">Simple Signal</span>
             </button>
             <button
               onClick={() => setViewMode('SCREENER')}
-              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+              className={`inline-flex items-center justify-center gap-1.5 px-2 sm:px-3 py-1.5 rounded-md text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                 viewMode === 'SCREENER'
                   ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-sm'
                   : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
               }`}
             >
-              <BarChart3 className="w-3.5 h-3.5" />
-              <span>Top Coins Now</span>
+              <BarChart3 className="w-3.5 h-3.5 shrink-0" />
+              <span className="truncate">Top Coins</span>
             </button>
             <button
               onClick={() => setViewMode('PRO')}
-              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+              className={`inline-flex items-center justify-center gap-1.5 px-2 sm:px-3 py-1.5 rounded-md text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                 viewMode === 'PRO'
                   ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-sm'
                   : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
               }`}
             >
-              <LayoutGrid className="w-3.5 h-3.5" />
-              <span>Full Terminal</span>
+              <LayoutGrid className="w-3.5 h-3.5 shrink-0" />
+              <span className="truncate">Pro Terminal</span>
             </button>
           </div>
 
-          <p className="text-xs text-slate-500 dark:text-slate-400 font-mono tabular-nums">
+          <p className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 font-mono tabular-nums leading-snug">
             {viewMode === 'SIMPLE'
               ? `${activeSymbol} · Stable ${HORIZON_CONFIG[activeHorizon].label} setup locked on closed ${HORIZON_CONFIG[activeHorizon].chartTf} chart (${signalSetup?.totalCriteria ?? 20} criteria)`
               : viewMode === 'SCREENER'
@@ -803,7 +823,7 @@ export default function App() {
 
               {/* Right Panel: Order Book, Live Trades & Sentinel Alerts */}
               <div className="lg:col-span-1 space-y-4">
-                <div className="h-[480px]">
+                <div className="h-[400px] sm:h-[480px]">
                   <OrderBookAndTrades
                     orderBook={orderBook}
                     trades={trades}

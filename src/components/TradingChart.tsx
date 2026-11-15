@@ -88,9 +88,16 @@ export const TradingChart: React.FC<TradingChartProps> = ({
     const textColor = isDarkMode ? '#94a3b8' : '#475569';
     const gridColor = isDarkMode ? 'rgba(30, 41, 59, 0.4)' : 'rgba(226, 232, 240, 0.8)';
 
+    const getChartHeight = () => {
+      if (typeof window === 'undefined') return 480;
+      if (window.innerWidth < 640) return 320;
+      if (window.innerWidth < 1024) return 420;
+      return 480;
+    };
+
     const chart = createChart(chartContainerRef.current, {
       width: chartContainerRef.current.clientWidth,
-      height: 480,
+      height: getChartHeight(),
       layout: {
         background: { type: ColorType.Solid, color: bgColor },
         textColor: textColor,
@@ -218,18 +225,27 @@ export const TradingChart: React.FC<TradingChartProps> = ({
       }
     });
 
-    // Resize Handler
+    // Responsive resize observer + window resize handler
     const handleResize = () => {
       if (chartContainerRef.current && chartRef.current) {
         chartRef.current.applyOptions({
           width: chartContainerRef.current.clientWidth,
+          height: getChartHeight(),
         });
       }
     };
     window.addEventListener('resize', handleResize);
+    const resizeObserver =
+      typeof ResizeObserver !== 'undefined'
+        ? new ResizeObserver(() => handleResize())
+        : null;
+    if (resizeObserver && chartContainerRef.current) {
+      resizeObserver.observe(chartContainerRef.current);
+    }
 
     return () => {
       window.removeEventListener('resize', handleResize);
+      resizeObserver?.disconnect();
       chart.remove();
       chartRef.current = null;
     };
@@ -669,7 +685,7 @@ export const TradingChart: React.FC<TradingChartProps> = ({
       </div>
 
       {/* Chart Canvas Container */}
-      <div ref={chartContainerRef} className="w-full h-[480px]" />
+      <div ref={chartContainerRef} className="w-full h-[320px] sm:h-[420px] lg:h-[480px]" />
 
       {/* Bottom Chart Footer info */}
       <div className="flex flex-wrap items-center justify-between px-4 py-2 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/40 text-xs font-mono tabular-nums text-slate-500 dark:text-slate-400 gap-2">
